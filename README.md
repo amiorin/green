@@ -37,13 +37,29 @@ configuration files, OpenTofu as the muscle.
 - `green.scaffold/scaffold` renders **flat file specs** through Selmer; on
   `delete` the same specs name what to remove.
 - `green.tofu/tofu-step` runs `tofu apply`/`destroy` per `:green/event` and
-  merges `tofu output -json` back into opts.
+  merges `tofu output -json` back into opts. Backends are advices:
+  `local-backend-advice` (default), `s3-backend-advice`, `gcs-backend-advice`.
+- `green.dry-run/advise` + the `--dry-run` flag: advised steps print what
+  they would do and are skipped.
+
+## Install
+
+As a git dep (once pushed to GitHub) or from Clojars:
+
+```clojure
+io.github.amiorin/green {:git/sha "…"}        ;; git dep
+io.github.amiorin/green {:mvn/version "0.1.0"} ;; Clojars, after deploy
+```
+
+Publishing: `clojure -T:build jar | install | deploy` (deploy reads
+`CLOJARS_USERNAME`/`CLOJARS_PASSWORD`).
 
 ## Try it
 
 ```sh
 cd examples/zookeeper
-./green create      # fake 3-node ZooKeeper cluster in ./work
+./green create --dry-run   # print the plan-of-record, touch nothing
+./green create             # fake 3-node ZooKeeper cluster in ./work
 ./green delete
 ```
 

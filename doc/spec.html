@@ -170,7 +170,11 @@
 <tr><td><code>:filter-return</code></td><td><code>(a (f opts))</code> — transform the result map.</td></tr>
 </table>
 <p>The exotic Emacs combinators (<code>:before-while</code>, <code>:after-until</code>, …) are deliberately omitted. Stacking is Emacs-like — <strong>LIFO, most recently added outermost</strong>. Every advice carries an <strong>explicit id</strong>; removal is by id (re-adding an existing id replaces it and moves it to the top of the stack). The advice stack runs inside the runner's try/catch: a throwing advice fails the step through the normal <code>:green/*</code> contract.</p>
-<p>green dogfoods this: the OpenTofu backend is not hardwired — a <code>:before</code> advice writes the backend config (always the local filesystem backend in v1) into the working directory before the tofu step runs. Swapping to a remote backend later means swapping one advice.</p>
+<p>green dogfoods this twice:</p>
+<ul>
+  <li><strong>Backends</strong> — the OpenTofu backend is not hardwired: a <code>:before</code> advice writes the backend config into the working directory before the tofu step runs (local filesystem by default; S3/GCS are alternative advices, see §8). Swapping backends means swapping one advice.</li>
+  <li><strong>Dry-run</strong> — <code>green.dry-run/advise</code> attaches an <code>:around</code> advice (id <code>:green.dry-run/skip</code>) to the side-effecting steps you name; when <code>:green/dry-run</code> is set (the CLI's <code>--dry-run</code> flag), those steps print <code>dry-run: would run :zk/node (create)</code> and are skipped with exit 0 — the rest of the graph still threads through.</li>
+</ul>
 
 <h2 id="scaffold">7. The scaffolding DSL</h2>
 <p>Configuration files are generated from <strong>flat file specs</strong>: a seq of maps, one per file.</p>
@@ -199,18 +203,20 @@
   <li><code>:create</code> (any non-delete event): <code>tofu init</code>, then <code>tofu apply -auto-approve</code>; afterwards <code>tofu output -json</code> is parsed and merged into opts <strong>under a namespaced key</strong> — <code>:tofu/outputs</code> by default (never top-level; the desired state stays uncontaminated).</li>
   <li><code>:delete</code>: <code>tofu init</code>, then <code>tofu destroy -auto-approve</code>.</li>
   <li>Non-zero tofu exits become <code>:green/exit</code> with stderr in <code>:green/err</code>.</li>
-  <li><code>green.tofu/local-backend-advice</code> builds the <code>:before</code> advice that writes the local-backend <code>backend.tf</code> into the directory (see §6).</li>
+  <li><strong>Backends are advices</strong> (see §6): <code>green.tofu/backend-advice</code> builds a <code>:before</code> advice writing <code>backend.tf</code> into the directory — backend type plus a flat attribute map (or a function of opts returning one). <code>local-backend-advice</code> (the default), <code>s3-backend-advice</code> (<code>{:bucket :key :region …}</code>), and <code>gcs-backend-advice</code> (<code>{:bucket :prefix}</code>) are the shipped variants.</li>
 </ul>
 
 <h2 id="cli">9. The CLI</h2>
-<pre><code>./green &lt;event&gt; [-f|--file green.edn] [--start step] [--end step]
+<pre><code>./green &lt;event&gt; [-f|--file green.edn] [--start step] [--end step] [--dry-run]
 
 ./green create                        # green.edn, full graph
 ./green delete -f prod.edn            # different desired state
-./green create --start zk/node --end zk/node   # re-run one slice</code></pre>
+./green create --start zk/node --end zk/node   # re-run one slice
+./green create --dry-run              # print what would run, touch nothing</code></pre>
 <ul>
   <li>The first positional argument is the lifecycle event, keywordized into <code>:green/event</code>.</li>
   <li><code>--start</code>/<code>--end</code> override the workflow's start/end for slice runs.</li>
+  <li><code>--dry-run</code> stamps <code>:green/dry-run true</code> into opts; steps advised with <code>green.dry-run</code> (see §6) print what they would do and are skipped.</li>
   <li>Missing event or state file → exit code 2 with a usage/error message on stderr.</li>
   <li><code>green.cli/run-cli</code> returns the final opts (testable); <code>green.cli/exec</code> prints <code>:green/err</code>/<code>:green/trace</code> to stderr and calls <code>System/exit</code> with <code>:green/exit</code>.</li>
 </ul>
@@ -238,18 +244,27 @@
 
 <h2 id="layout">11. Project layout &amp; API index</h2>
 <pre><code>green/
-├── deps.edn            JVM deps: selmer, babashka/cli, cheshire (+ :test alias)
+├── deps.edn            JVM deps: selmer, babashka/cli, cheshire (+ :test, :build)
 ├── bb.edn              paths + `bb test` task
+├── build.clj           tools.build: clean / jar / install / deploy
 ├── doc/spec.html       this document
 ├── src/green/
 │   ├── workflow.clj    workflow, run, advice-add, advice-remove
 │   ├── advice.clj      combinators, LIFO composition (pure registry ops)
 │   ├── scaffold.clj    scaffold, template resolution
-│   ├── tofu.clj        tofu-step, outputs, local-backend-advice
+│   ├── tofu.clj        tofu-step, outputs, backend advices (local/s3/gcs)
+│   ├── dry_run.clj     dry-run advice + advise
 │   └── cli.clj         run-cli, exec, arg parsing
-├── test/green/         advice, workflow, scaffold, cli, zookeeper suites
+├── test/green/         advice, workflow, scaffold, cli, dry-run, tofu, zookeeper
 ├── test-resources/     zk/main.tf, zk/zoo.cfg, … (qualified-namespace layout)
 └── examples/zookeeper/ self-contained ./green script + green.edn + resources</code></pre>
+
+<h3>Distribution</h3>
+<p>Library coordinate: <code>io.github.amiorin/green</code>, version <code>0.1.0</code>.</p>
+<ul>
+  <li><strong>Git dep</strong> (no registry needed): <code>io.github.amiorin/green {:git/sha "…"}</code> once the repo is pushed to GitHub — this is what the babashka script's <code>add-deps</code> uses in production (<code>{:local/root …}</code> during development).</li>
+  <li><strong>Clojars</strong>: <code>clojure -T:build jar</code> builds the jar + pom (MIT license, SCM data); <code>clojure -T:build install</code> puts it in the local <code>~/.m2</code>; <code>clojure -T:build deploy</code> pushes to Clojars using the <code>CLOJARS_USERNAME</code>/<code>CLOJARS_PASSWORD</code> environment variables.</li>
+</ul>
 
 <table>
 <tr><th>Function</th><th>Signature</th></tr>
@@ -259,7 +274,12 @@
 <tr><td><code>green.workflow/advice-remove</code></td><td><code>workflow, step, id → workflow</code></td></tr>
 <tr><td><code>green.scaffold/scaffold</code></td><td><code>opts, specs → opts</code></td></tr>
 <tr><td><code>green.tofu/tofu-step</code></td><td><code>opts, {:dir :output-key} → opts</code></td></tr>
-<tr><td><code>green.tofu/local-backend-advice</code></td><td><code>(opts → dir) → before-advice</code></td></tr>
+<tr><td><code>green.tofu/backend-advice</code></td><td><code>(opts → dir), type, config → before-advice</code></td></tr>
+<tr><td><code>green.tofu/local-backend-advice</code></td><td><code>(opts → dir) [, config] → before-advice</code></td></tr>
+<tr><td><code>green.tofu/s3-backend-advice</code></td><td><code>(opts → dir), config → before-advice</code></td></tr>
+<tr><td><code>green.tofu/gcs-backend-advice</code></td><td><code>(opts → dir), config → before-advice</code></td></tr>
+<tr><td><code>green.dry-run/advice</code></td><td><code>step → around-advice</code></td></tr>
+<tr><td><code>green.dry-run/advise</code></td><td><code>workflow, steps → workflow</code></td></tr>
 <tr><td><code>green.cli/run-cli</code></td><td><code>workflow, args → final opts</code></td></tr>
 <tr><td><code>green.cli/exec</code></td><td><code>workflow (&amp; args) → exits process</code></td></tr>
 </table>

@@ -5,6 +5,7 @@
 (babashka.classpath/add-classpath "resources")
 
 (require '[green.cli :as cli]
+         '[green.dry-run :as dry-run]
          '[green.scaffold :as sc]
          '[green.tofu :as tofu]
          '[green.workflow :as wf])
@@ -53,6 +54,8 @@
 (def workflow
   (-> (wf/workflow {:start :zk/start :wire-fn wire-fn :next-fn next-fn})
       (wf/advice-add :zk/node :before ::backend
-                     (tofu/local-backend-advice #(node-dir % (:zk/node %))))))
+                     (tofu/local-backend-advice #(node-dir % (:zk/node %))))
+      ;; ./green create --dry-run prints what would run instead of running it
+      (dry-run/advise [:zk/node :zk/zoo-cfg])))
 
 (cli/exec workflow)

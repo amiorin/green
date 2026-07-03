@@ -44,13 +44,43 @@
           delete? (assoc opts :green/exit 0)
           :else (assoc opts :green/exit 0 output-key (outputs dir)))))))
 
-(defn local-backend-advice
-  "Build a :before advice that writes the local filesystem backend config
-  into the directory returned by (dir-fn opts) before the step runs."
-  [dir-fn]
+(defn- hcl-value [v]
+  (cond
+    (keyword? v) (pr-str (name v))
+    (boolean? v) (str v)
+    (number? v) (str v)
+    :else (pr-str (str v))))
+
+(defn backend-advice
+  "Build a :before advice that writes a backend config into the directory
+  returned by (dir-fn opts) before the step runs. `type` is the backend
+  name (\"local\", \"s3\", \"gcs\", …); `config` is a flat map of backend
+  attributes, or a function of opts returning one."
+  [dir-fn type config]
   (fn [opts]
-    (let [dir (io/file (dir-fn opts))]
+    (let [dir (io/file (dir-fn opts))
+          config (if (fn? config) (config opts) config)]
       (.mkdirs dir)
       (spit (io/file dir "backend.tf")
-            "terraform {\n  backend \"local\" {}\n}\n"))
+            (str "terraform {\n  backend \"" type "\" {\n"
+                 (apply str (for [[k v] (sort-by key config)]
+                              (str "    " (name k) " = " (hcl-value v) "\n")))
+                 "  }\n}\n")))
     opts))
+
+(defn local-backend-advice
+  "Backend advice for the local filesystem backend (the v1 default)."
+  ([dir-fn] (local-backend-advice dir-fn {}))
+  ([dir-fn config] (backend-advice dir-fn "local" config)))
+
+(defn s3-backend-advice
+  "Backend advice for the S3 backend, e.g.
+  {:bucket \"my-state\" :key \"green/node-1.tfstate\" :region \"eu-west-1\"}."
+  [dir-fn config]
+  (backend-advice dir-fn "s3" config))
+
+(defn gcs-backend-advice
+  "Backend advice for the GCS backend, e.g.
+  {:bucket \"my-state\" :prefix \"green/node-1\"}."
+  [dir-fn config]
+  (backend-advice dir-fn "gcs" config))

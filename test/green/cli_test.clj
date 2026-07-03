@@ -36,6 +36,12 @@
                            ["create" "-f" (state-file "{:x 1}") "--start" "t/b"])]
       (is (= [:b] (:seen res))))))
 
+(deftest dry-run-flag-stamps-the-key
+  (let [wf (wf/workflow {:start :t/a
+                         :wire-fn (fn [_] [(fn [o] (assoc o :dry (:green/dry-run o)))])})]
+    (is (true? (:dry (cli/run-cli wf ["create" "-f" (state-file "{}") "--dry-run"]))))
+    (is (nil? (:dry (cli/run-cli wf ["create" "-f" (state-file "{}")]))))))
+
 (deftest usage-errors-exit-2
   (testing "missing event"
     (let [res (cli/run-cli (probe-wf) [])]

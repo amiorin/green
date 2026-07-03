@@ -6,12 +6,16 @@
                    [green.workflow-test]
                    [green.scaffold-test]
                    [green.cli-test]
+                   [green.dry-run-test]
+                   [green.tofu-test]
                    [green.zookeeper-test])
         :task (let [{:keys [fail error]}
                     (clojure.test/run-tests 'green.advice-test
                                             'green.workflow-test
                                             'green.scaffold-test
                                             'green.cli-test
+                                            'green.dry-run-test
+                                            'green.tofu-test
                                             'green.zookeeper-test)]
                 (when (pos? (+ fail error))
                   (System/exit 1)))}}}

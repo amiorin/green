@@ -10,10 +10,11 @@
 (def ^:private cli-spec
   {:file {:alias :f :default "green.edn" :desc "Desired state EDN file"}
    :start {:coerce :keyword :desc "Override the workflow start step"}
-   :end {:coerce :keyword :desc "Override the workflow end step (slice boundary)"}})
+   :end {:coerce :keyword :desc "Override the workflow end step (slice boundary)"}
+   :dry-run {:coerce :boolean :desc "Stamp :green/dry-run — steps advised with green.dry-run are skipped"}})
 
 (def usage
-  "Usage: green <event> [-f|--file green.edn] [--start step] [--end step]")
+  "Usage: green <event> [-f|--file green.edn] [--start step] [--end step] [--dry-run]")
 
 (defn run-cli
   "Parse `args`, load the desired state, stamp :green/event, run `workflow`.
@@ -32,7 +33,9 @@
                    workflow (cond-> workflow
                               (:start opts) (assoc :green.workflow/start (:start opts))
                               (:end opts) (assoc :green.workflow/end (:end opts)))]
-               (wf/run workflow (assoc state :green/event (keyword event))))))))
+               (wf/run workflow
+                       (cond-> (assoc state :green/event (keyword event))
+                         (:dry-run opts) (assoc :green/dry-run true))))))))
      (catch Throwable t
        {:green/exit 2 :green/err (or (ex-message t) (str (class t)))}))))
 
