@@ -1,0 +1,9 @@
+.cpcache/
+.clj-kondo/.cache/
+.lsp/.cache/
+target/
+work/
+examples/zookeeper/work/
+**/.terraform/
+*.tfstate
+*.tfstate.backup

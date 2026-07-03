@@ -1,0 +1,17 @@
+{:paths ["src" "resources" "test" "test-resources"]
+ :tasks
+ {test {:doc "Run the test suite under babashka"
+        :requires ([clojure.test]
+                   [green.advice-test]
+                   [green.workflow-test]
+                   [green.scaffold-test]
+                   [green.cli-test]
+                   [green.zookeeper-test])
+        :task (let [{:keys [fail error]}
+                    (clojure.test/run-tests 'green.advice-test
+                                            'green.workflow-test
+                                            'green.scaffold-test
+                                            'green.cli-test
+                                            'green.zookeeper-test)]
+                (when (pos? (+ fail error))
+                  (System/exit 1)))}}}
