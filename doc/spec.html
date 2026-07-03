@@ -134,6 +134,18 @@
   <li>Because it sees <code>:green/exit</code>, next-fn is also the error router: reroute failures to cleanup steps, retry, or halt.</li>
 </ul>
 
+<h3>Composition — a workflow is a step</h3>
+<p><code>wf/run</code> has the exact shape of a step (<code>opts → opts</code>, outcome in <code>:green/exit</code>), so workflows compose into higher-level workflows with one function:</p>
+<pre><code>(wf/step cluster-wf)                       ;; workflow → step fn: wire it, advise it, fan it out
+(wf/step cluster-wf
+         {:in  (fn [opts] …)               ;; shape the opts entering the sub-workflow
+          :out (fn [opts result] …)})      ;; merge the result back (default: result wins)</code></pre>
+<ul>
+  <li>The sub-workflow's <code>:green/exit</code> (and <code>:green/err</code>/<code>:green/trace</code>) propagates like any step's — a failing sub-workflow halts or routes in the parent normally.</li>
+  <li>Ambient keys (<code>:green/event</code>, <code>:green/dry-run</code>) flow in with opts, so lifecycle and dry-run work through arbitrary nesting for free.</li>
+  <li>Fan out a composed step to run the same workflow many times with different scopes — e.g. one ZooKeeper-cluster workflow, fanned out per cluster with <code>:in</code> rewriting <code>:zk/workdir</code>/<code>:zk/servers</code> (see <code>examples/multi-zookeeper</code>).</li>
+</ul>
+
 <h3>Termination &amp; slices</h3>
 <ul>
   <li>A branch terminates when its next step is <code>nil</code> — wire-fn lists no successor (and no next-fn overrides), or next-fn returns empty.</li>
@@ -257,7 +269,8 @@
 │   └── cli.clj         run-cli, exec, arg parsing
 ├── test/green/         advice, workflow, scaffold, cli, dry-run, tofu, zookeeper
 ├── test-resources/     zk/main.tf, zk/zoo.cfg, … (qualified-namespace layout)
-└── examples/zookeeper/ self-contained ./green script + green.edn + resources</code></pre>
+├── examples/zookeeper/ self-contained ./green script + green.edn + resources
+└── examples/multi-zookeeper/ two clusters composed from one workflow (wf/step)</code></pre>
 
 <h3>Distribution</h3>
 <p>Library coordinate: <code>io.github.amiorin/green</code>, version <code>0.1.0</code>.</p>
@@ -272,6 +285,7 @@
 <tr><td><code>green.workflow/run</code></td><td><code>workflow, opts → final opts</code></td></tr>
 <tr><td><code>green.workflow/advice-add</code></td><td><code>workflow, step, how, id, f → workflow</code></td></tr>
 <tr><td><code>green.workflow/advice-remove</code></td><td><code>workflow, step, id → workflow</code></td></tr>
+<tr><td><code>green.workflow/step</code></td><td><code>workflow [, {:in :out}] → step fn (composition)</code></td></tr>
 <tr><td><code>green.scaffold/scaffold</code></td><td><code>opts, specs → opts</code></td></tr>
 <tr><td><code>green.tofu/tofu-step</code></td><td><code>opts, {:dir :output-key} → opts</code></td></tr>
 <tr><td><code>green.tofu/backend-advice</code></td><td><code>(opts → dir), type, config → before-advice</code></td></tr>

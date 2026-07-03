@@ -86,6 +86,76 @@
                 {:id 2 :name "zk2" :ip "10.0.0.2"}
                 {:id 3 :name "zk3" :ip "10.0.0.3"}]})
 
+;; --- composition: two clusters from the same workflow ------------------------
+;; `wf/step` turns cluster-wf into an ordinary step; the parent fans it out
+;; once per cluster (in parallel), scoping each run with :in.
+
+(def two-clusters-wf
+  (wf/workflow
+   {:start :clusters/start
+    :wire-fn (fn [step]
+               (case step
+                 :clusters/start [start-step :clusters/cluster]
+                 :clusters/cluster [(wf/step cluster-wf
+                                             {:in (fn [opts]
+                                                    (let [c (:zk/cluster opts)]
+                                                      (assoc opts
+                                                             :zk/servers (:servers c)
+                                                             :zk/workdir (str (:zk/workdir opts)
+                                                                              "/" (:name c)))))})
+                                    :clusters/report]
+                 :clusters/report [(fn [opts]
+                                     (assoc opts :clusters/reported
+                                            (set (map :zk/workdir (:green/branches opts)))))]))
+    :next-fn (fn [step default-next opts]
+               (cond
+                 (pos? (:green/exit opts 0)) []
+                 (= step :clusters/start) (mapv (fn [c] [:clusters/cluster (assoc opts :zk/cluster c)])
+                                                (:zk/clusters opts))
+                 :else (mapv (fn [s] [s opts]) default-next)))}))
+
+(def two-clusters-state
+  {:zk/clusters [{:name "alpha"
+                  :servers [{:id 1 :name "zk1" :ip "10.0.1.1"}
+                            {:id 2 :name "zk2" :ip "10.0.1.2"}]}
+                 {:name "beta"
+                  :servers [{:id 1 :name "zk1" :ip "10.0.2.1"}
+                            {:id 2 :name "zk2" :ip "10.0.2.2"}]}]})
+
+(deftest two-zookeeper-clusters
+  (if-not (tofu-available?)
+    (println "SKIP green.zookeeper-test/two-zookeeper-clusters: tofu not on PATH")
+    (let [work (tmpdir)
+          state (assoc two-clusters-state :zk/workdir work)]
+
+      (testing "create: the cluster workflow runs twice, in parallel"
+        (let [res (wf/run two-clusters-wf (assoc state :green/event :create))]
+          (is (= 0 (:green/exit res)) (str (:green/err res)))
+          (is (= 2 (count (:green/branches res))))
+          (is (= #{(str work "/alpha") (str work "/beta")} (:clusters/reported res)))
+          (doseq [{cname :name servers :servers} (:zk/clusters state)
+                  {:keys [id]} servers]
+            (let [dir (str work "/" cname "/nodes/" id)]
+              (is (.exists (io/file dir "main.tf")) dir)
+              (is (.exists (io/file dir "terraform.tfstate")) dir)
+              (let [cfg (slurp (io/file dir "zoo.cfg"))]
+                (doseq [{:keys [id ip]} servers]
+                  (is (str/includes? cfg (str "server." id "=" ip ":2888:3888"))
+                      "zoo.cfg lists this cluster's members")))))
+          (testing "clusters stay isolated"
+            (is (not (str/includes? (slurp (io/file (str work "/alpha/nodes/1") "zoo.cfg"))
+                                    "10.0.2."))
+                "alpha's zoo.cfg must not list beta's nodes"))))
+
+      (testing "delete tears down both clusters"
+        (let [res (wf/run two-clusters-wf (assoc state :green/event :delete))]
+          (is (= 0 (:green/exit res)) (str (:green/err res)))
+          (doseq [{cname :name servers :servers} (:zk/clusters state)
+                  {:keys [id]} servers]
+            (let [dir (str work "/" cname "/nodes/" id)]
+              (is (not (.exists (io/file dir "main.tf"))))
+              (is (not (.exists (io/file dir "zoo.cfg")))))))))))
+
 (deftest zookeeper-fake-cluster
   (if-not (tofu-available?)
     (println "SKIP green.zookeeper-test: tofu not on PATH")

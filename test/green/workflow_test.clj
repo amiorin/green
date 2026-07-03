@@ -138,6 +138,49 @@
     (is (not-any? #(= % :join-ran) (:seen res [])) "join must be skipped")
     (is (= 2 (count (:green/branches res))) "both branches finished")))
 
+(deftest workflows-compose-as-steps
+  (let [sub (wf/workflow {:start :s/a
+                          :wire-fn (fn [s]
+                                     (case s
+                                       :s/a [(mark :sub-a) :s/b]
+                                       :s/b [(mark :sub-b)]))})
+        parent (wf/workflow {:start :p/a
+                             :wire-fn (fn [s]
+                                        (case s
+                                          :p/a [(mark :p-a) :p/sub]
+                                          :p/sub [(wf/step sub) :p/z]
+                                          :p/z [(mark :p-z)]))})
+        res (wf/run parent {})]
+    (is (= 0 (:green/exit res)))
+    (is (= [:p-a :sub-a :sub-b :p-z] (:seen res)))))
+
+(deftest sub-workflow-failure-halts-the-parent
+  (let [sub (wf/workflow {:start :s/a
+                          :wire-fn (fn [_] [(fn [o] (assoc o :green/exit 4
+                                                           :green/err "sub failed"))])})
+        parent (wf/workflow {:start :p/sub
+                             :wire-fn (fn [s]
+                                        (case s
+                                          :p/sub [(wf/step sub) :p/z]
+                                          :p/z [(mark :p-z)]))})
+        res (wf/run parent {})]
+    (is (= 4 (:green/exit res)))
+    (is (= "sub failed" (:green/err res)))
+    (is (nil? (:seen res)) ":p/z must not run")))
+
+(deftest step-in-out-scope-the-sub-workflow
+  (let [sub (wf/workflow {:start :s/a
+                          :wire-fn (fn [_] [(fn [o] (assoc o :result (* 2 (:n o))))])})
+        parent (wf/workflow {:start :p/sub
+                             :wire-fn (fn [_]
+                                        [(wf/step sub
+                                                  {:in (fn [o] {:green/event (:green/event o)
+                                                                :n (:parent-n o)})
+                                                   :out (fn [o r] (assoc o :doubled (:result r)))})])})
+        res (wf/run parent {:green/event :create :parent-n 21 :keep-me :yes})]
+    (is (= 42 (:doubled res)))
+    (is (= :yes (:keep-me res)) ":out preserved the parent opts")))
+
 (deftest parallel-branches-actually-run-concurrently
   (let [in-flight (atom 0)
         peak (atom 0)

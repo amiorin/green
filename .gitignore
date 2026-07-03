@@ -7,3 +7,4 @@ examples/zookeeper/work/
 **/.terraform/
 *.tfstate
 *.tfstate.backup
+examples/multi-zookeeper/work/

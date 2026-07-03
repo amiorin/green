@@ -1,0 +1,92 @@
+#!/usr/bin/env bb
+;; Two fake ZooKeeper clusters from ONE cluster workflow, composed with
+;; wf/step. Run from this directory:   ./green create   |   ./green delete
+(babashka.deps/add-deps '{:deps {io.github.amiorin/green {:local/root "../.."}}})
+(babashka.classpath/add-classpath "resources")
+
+(require '[green.cli :as cli]
+         '[green.dry-run :as dry-run]
+         '[green.scaffold :as sc]
+         '[green.tofu :as tofu]
+         '[green.workflow :as wf])
+
+;; --- the single-cluster workflow (same shape as examples/zookeeper) ---------
+
+(defn node-dir [opts node]
+  (str (:zk/workdir opts) "/nodes/" (:id node)))
+
+(defn start-step [opts] opts)
+
+(defn node-step [opts]
+  (let [node (:zk/node opts)
+        dir (node-dir opts node)
+        specs [{:template :zk/main.tf
+                :target (str dir "/main.tf")
+                :data {:node node}}]]
+    (if (= :delete (:green/event opts))
+      (let [opts (tofu/tofu-step opts {:dir dir})]
+        (if (pos? (:green/exit opts 0)) opts (sc/scaffold opts specs)))
+      (let [opts (sc/scaffold opts specs)]
+        (tofu/tofu-step opts {:dir dir})))))
+
+(defn zoo-cfg-step [opts]
+  (let [nodes (:zk/servers opts)
+        servers (if (= :delete (:green/event opts))
+                  nodes
+                  (->> (:green/branches opts) (map :tofu/outputs) (sort-by :id)))
+        specs (for [n nodes]
+                {:template :zk/zoo.cfg
+                 :target (str (:zk/workdir opts) "/nodes/" (:id n) "/zoo.cfg")
+                 :data {:servers servers}})]
+    (sc/scaffold opts specs)))
+
+(defn cluster-wire-fn [step]
+  (case step
+    :zk/start   [start-step :zk/node]
+    :zk/node    [node-step :zk/zoo-cfg]
+    :zk/zoo-cfg [zoo-cfg-step]))
+
+(defn cluster-next-fn [step default-next opts]
+  (cond
+    (pos? (:green/exit opts 0)) []
+    (= step :zk/start) (mapv (fn [n] [:zk/node (assoc opts :zk/node n)])
+                             (:zk/servers opts))
+    :else (mapv (fn [s] [s opts]) default-next)))
+
+(def cluster-wf
+  (-> (wf/workflow {:start :zk/start :wire-fn cluster-wire-fn :next-fn cluster-next-fn})
+      (wf/advice-add :zk/node :before ::backend
+                     (tofu/local-backend-advice #(node-dir % (:zk/node %))))
+      (dry-run/advise [:zk/node :zk/zoo-cfg])))
+
+;; --- the higher-level workflow: one cluster-wf run per cluster --------------
+
+(defn clusters-wire-fn [step]
+  (case step
+    :clusters/start [start-step :clusters/cluster]
+    :clusters/cluster [(wf/step cluster-wf
+                                {:in (fn [opts]
+                                       (let [c (:zk/cluster opts)]
+                                         (assoc opts
+                                                :zk/servers (:servers c)
+                                                :zk/workdir (str (:zk/workdir opts)
+                                                                 "/" (:name c)))))})
+                       :clusters/report]
+    :clusters/report [(fn [opts]
+                        (doseq [b (:green/branches opts)]
+                          (println "cluster ready:" (:zk/workdir b)))
+                        opts)]))
+
+(defn clusters-next-fn [step default-next opts]
+  (cond
+    (pos? (:green/exit opts 0)) []
+    (= step :clusters/start) (mapv (fn [c] [:clusters/cluster (assoc opts :zk/cluster c)])
+                                   (:zk/clusters opts))
+    :else (mapv (fn [s] [s opts]) default-next)))
+
+(def workflow
+  (wf/workflow {:start :clusters/start
+                :wire-fn clusters-wire-fn
+                :next-fn clusters-next-fn}))
+
+(cli/exec workflow)

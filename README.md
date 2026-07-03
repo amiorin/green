@@ -34,6 +34,9 @@ configuration files, OpenTofu as the muscle.
   converging on a step **join** it once, with results under `:green/branches`.
 - **Advice** (Emacs-style, workflow-scoped): wrap or override steps by name
   without touching the wiring.
+- **Composition**: `(wf/step sub-workflow {:in … :out …})` turns a workflow
+  into an ordinary step — wire it, advise it, fan it out. See
+  `examples/multi-zookeeper` for two clusters built from one cluster workflow.
 - `green.scaffold/scaffold` renders **flat file specs** through Selmer; on
   `delete` the same specs name what to remove.
 - `green.tofu/tofu-step` runs `tofu apply`/`destroy` per `:green/event` and
@@ -60,6 +63,10 @@ Publishing: `clojure -T:build jar | install | deploy` (deploy reads
 cd examples/zookeeper
 ./green create --dry-run   # print the plan-of-record, touch nothing
 ./green create             # fake 3-node ZooKeeper cluster in ./work
+./green delete
+
+cd ../multi-zookeeper
+./green create             # two clusters, one composed workflow, in parallel
 ./green delete
 ```
 

@@ -190,6 +190,25 @@
       :else (or (first (filter #(pos? (:green/exit % 0)) terminals))
                 (last terminals)))))
 
+(declare run)
+
+(defn step
+  "Turn a workflow into a step function (opts -> opts), so workflows compose
+  into higher-level workflows: wire the result like any other step, advise
+  it, fan it out. The sub-workflow's :green/exit propagates naturally, and
+  ambient keys like :green/event and :green/dry-run flow in with opts.
+
+  Options:
+    :in  (fn [opts] sub-opts)        — shape the opts entering the sub-workflow
+    :out (fn [opts sub-result] opts) — merge the sub-result back into the
+                                       parent's opts (default: the sub-result
+                                       itself is the step's result)"
+  ([wf] (step wf {}))
+  ([wf {:keys [in out]}]
+   (fn [opts]
+     (let [result (run wf ((or in identity) opts))]
+       (if out (out opts result) result)))))
+
 (defn run
   "Run the workflow from its start step with `opts` as the initial state.
   Returns the final opts map; its :green/exit is the workflow's exit code."
