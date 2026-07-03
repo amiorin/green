@@ -8,3 +8,5 @@ examples/zookeeper/work/
 *.tfstate
 *.tfstate.backup
 examples/multi-zookeeper/work/
+/.parcel-cache/
+/dist/
