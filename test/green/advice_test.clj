@@ -68,3 +68,39 @@
     (is (= 1 (:green/exit res)))
     (is (= "advice boom" (:green/err res)))
     (is (string? (:green/trace res)))))
+
+(defn- two-step-wf []
+  (wf/workflow {:start :t/a
+               :wire-fn (fn [s]
+                          (case s
+                            :t/a [(fn [o] (log o :a)) :t/b]
+                            :t/b [(fn [o] (log o :b))]))}))
+
+(deftest advice-add-all-applies-to-every-step
+  (let [advised (-> (two-step-wf)
+                    (wf/advice-add-all :filter-return ::tag #(log % :all)))]
+    (is (= [:a :all :b :all] (:log (wf/run advised {}))))))
+
+(deftest advice-add-all-interleaves-in-strict-add-order-with-per-step
+  (let [advised (-> (two-step-wf)
+                    (wf/advice-add-all :filter-return ::g1 #(log % :g1))
+                    (wf/advice-add :t/a :filter-return ::pa #(log % :pa))
+                    (wf/advice-add-all :filter-return ::g2 #(log % :g2)))
+        res (wf/run advised {})]
+    (testing ":t/a ran with both global entries plus its own, in add order"
+      (is (= [:a :g1 :pa :g2] (subvec (:log res) 0 4))))
+    (testing ":t/b, with no per-step advice, only saw the globals in add order"
+      (is (= [:b :g1 :g2] (subvec (:log res) 4))))))
+
+(deftest advice-remove-all-removes-the-global-entry
+  (let [advised (-> (two-step-wf)
+                    (wf/advice-add-all :filter-return ::g #(log % :g))
+                    (wf/advice-remove-all ::g))]
+    (is (= [:a :b] (:log (wf/run advised {}))))))
+
+(deftest advice-add-all-workflow-is-untouched-by-later-adds
+  (let [base (two-step-wf)
+        g1 (wf/advice-add-all base :filter-return ::g1 #(log % :g1))
+        g2 (wf/advice-add-all g1 :filter-return ::g2 #(log % :g2))]
+    (is (= [:a :g1 :b :g1] (:log (wf/run g1 {}))) "g1 is untouched by adding g2")
+    (is (= [:a :g1 :g2 :b :g1 :g2] (:log (wf/run g2 {}))))))

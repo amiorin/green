@@ -11,7 +11,10 @@
     with the fork-point opts plus :green/branches (vector of branch results).
   - A branch failing inside a fork lets the in-flight siblings finish their
     current step, then the fork collapses: the join is skipped and the worst
-    exit propagates, with all branch results under :green/branches."
+    exit propagates, with all branch results under :green/branches.
+  - advice-add attaches advice to one step; advice-add-all attaches advice
+    to every step. Both stack in strict add order (most recently added,
+    from either, is outermost)."
   (:require [green.advice :as advice])
   (:import [java.io PrintWriter StringWriter]))
 
@@ -21,18 +24,44 @@
   :next-fn is optional."
   [{:keys [start end wire-fn next-fn]}]
   {:pre [(keyword? start) (fn? wire-fn)]}
-  {::start start ::end end ::wire-fn wire-fn ::next-fn next-fn ::advice {}})
+  {::start start ::end end ::wire-fn wire-fn ::next-fn next-fn
+   ::advice {} ::advice-all [] ::advice-seq 0})
+
+(defn- next-seq [wf]
+  (::advice-seq wf 0))
 
 (defn advice-add
   "Return a workflow with advice `f` added on `step` (combinator `how`,
-  explicit `id`). Pure — the original workflow is untouched."
+  explicit `id`). Pure — the original workflow is untouched. Composes with
+  any all-steps advice (see `advice-add-all`) in strict add order: whichever
+  was added more recently is outermost."
   [wf step how id f]
-  (update wf ::advice advice/add step how id f))
+  (let [s (next-seq wf)]
+    (-> wf
+        (update ::advice advice/add step how id f s)
+        (assoc ::advice-seq (inc s)))))
 
 (defn advice-remove
   "Return a workflow with the advice registered under `id` on `step` removed."
   [wf step id]
   (update wf ::advice advice/remove-id step id))
+
+(defn advice-add-all
+  "Return a workflow with advice `f` added on every step (combinator `how`,
+  explicit `id`). Pure — the original workflow is untouched. Composes with
+  any per-step advice in strict add order: whichever was added more
+  recently is outermost, regardless of whether it came from `advice-add`
+  or `advice-add-all`."
+  [wf how id f]
+  (let [s (next-seq wf)]
+    (-> wf
+        (update ::advice-all advice/add-global how id f s)
+        (assoc ::advice-seq (inc s)))))
+
+(defn advice-remove-all
+  "Return a workflow with the all-steps advice registered under `id` removed."
+  [wf id]
+  (update wf ::advice-all advice/remove-global-id id))
 
 ;; --- static graph (for join scheduling) ---------------------------------
 
@@ -74,7 +103,8 @@
           f (first decl)]
       (when-not (fn? f)
         (throw (ex-info (str "no function wired for step " step) {:step step})))
-      (let [ret ((advice/compose f (get-in wf [::advice step])) opts)]
+      (let [entries (sort-by :seq (concat (::advice-all wf) (get-in wf [::advice step])))
+            ret ((advice/compose f entries) opts)]
         (when-not (map? ret)
           (throw (ex-info (str "step " step " returned a non-map: " (pr-str ret))
                           {:step step})))
