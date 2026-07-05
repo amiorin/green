@@ -4,7 +4,9 @@
   optional :depth override, removal by explicit id.
   Registries are plain maps of step-name -> vector of
   {:id :how :fn :seq :depth}, so all operations are pure — advice is
-  workflow-scoped, not global.
+  workflow-scoped, not global. A workflow embedded via
+  green.workflow/step inherits its ancestors' advice at run time by
+  merging registries (see `merge-entries`); the values stay pure.
   The :seq field is a caller-assigned monotonic add-order number; it lets
   a step-scoped registry and a separate all-steps registry be merged and
   sorted into one strict add-order stack (see green.workflow/run-step).
@@ -63,6 +65,24 @@
   [entries id]
   (filterv #(not= id (:id %)) entries))
 
+(defn merge-entries
+  "Stack `outer` entries (inherited from an enclosing workflow) outside
+  `inner` ones: outer seqs are rebased by `offset` so they sort above
+  every inner seq, and an outer entry replaces an inner one with the same
+  :id. :depth still overrides placement at compose time."
+  [inner outer offset]
+  (let [outer (mapv #(update % :seq + offset) outer)
+        replaced? (set (map :id outer))]
+    (into (filterv #(not (replaced? (:id %))) (or inner [])) outer)))
+
+(defn merge-registry
+  "Merge an outer step-keyed registry over an inner one, step by step,
+  with `merge-entries`."
+  [inner outer offset]
+  (reduce-kv (fn [reg step entries]
+               (update reg step merge-entries entries offset))
+             (or inner {}) outer))
+
 (defn- wrap [how a base]
   (case how
     :around        (fn [opts] (a base opts))
@@ -76,12 +96,17 @@
     :filter-args   (fn [opts] (base (a opts)))
     :filter-return (fn [opts] (a (base opts)))))
 
+(defn ordered
+  "Entries sorted innermost-first — the order `compose` wraps them:
+  higher :depth is more inward; at equal depth the most recently added
+  (largest :seq) is outermost."
+  [entries]
+  (sort-by (juxt #(- (:depth % 0)) :seq) entries))
+
 (defn compose
   "Wrap `base` with `entries`, ordered like Emacs nadvice: lower :depth is
   more outward; at equal depth the most recently added (largest :seq) is
-  outermost. The reduce builds inside-out, so entries are sorted
-  innermost-first (descending :depth, ascending :seq)."
+  outermost. The reduce builds inside-out over `ordered` (innermost-first)
+  entries."
   [base entries]
-  (->> entries
-       (sort-by (juxt #(- (:depth % 0)) :seq))
-       (reduce (fn [g {:keys [how fn]}] (wrap how fn g)) base)))
+  (reduce (fn [g {:keys [how fn]}] (wrap how fn g)) base (ordered entries)))

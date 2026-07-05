@@ -218,6 +218,95 @@
                (wf/advice-add (single-step-wf) :t/step :before ::deep identity
                               {:depth 101}))))
 
+;; --- cross-workflow inheritance (advice through wf/step) -------------------
+
+(defn- embed
+  "A parent workflow that runs :p/a, then `sub` as an embedded step, then :p/z."
+  [sub]
+  (wf/workflow {:start :p/a
+                :wire-fn (fn [s]
+                           (case s
+                             :p/a [(fn [o] (log o :p-a)) :p/sub]
+                             :p/sub [(wf/step sub) :p/z]
+                             :p/z [(fn [o] (log o :p-z))]))}))
+
+(deftest parent-advice-reaches-an-embedded-step
+  (let [sub (single-step-wf)
+        parent (-> (embed sub)
+                   (wf/advice-add :t/step :filter-return ::p #(log % :p)))]
+    (is (= [:p-a :base :p :p-z] (:log (wf/run parent {}))))
+    (testing "the child value is untouched — standalone runs stay bare"
+      (is (= [:base] (:log (wf/run sub {})))))))
+
+(deftest parent-override-redefines-an-embedded-step
+  (let [parent (-> (embed (single-step-wf))
+                   (wf/advice-add :t/step :override ::o #(log % :redefined)))]
+    (is (= [:p-a :redefined :p-z] (:log (wf/run parent {}))))))
+
+(deftest inherited-advice-is-outermost
+  (let [sub (-> (single-step-wf)
+                (wf/advice-add :t/step :filter-return ::c #(log % :child)))
+        parent (-> (embed sub)
+                   (wf/advice-add :t/step :filter-return ::p #(log % :parent)))]
+    (is (= [:p-a :base :child :parent :p-z] (:log (wf/run parent {}))))))
+
+(deftest same-id-parent-advice-replaces-the-childs
+  (let [sub (-> (single-step-wf)
+                (wf/advice-add :t/step :filter-return ::x #(log % :child-x)))
+        parent (-> (embed sub)
+                   (wf/advice-add :t/step :filter-return ::x #(log % :parent-x)))]
+    (is (= [:p-a :base :parent-x :p-z] (:log (wf/run parent {}))))))
+
+(deftest depth-overrides-inheritance-order
+  (let [sub (-> (single-step-wf)
+                (wf/advice-add :t/step :filter-return ::c #(log % :child) {:depth -50}))
+        parent (-> (embed sub)
+                   (wf/advice-add :t/step :filter-return ::p #(log % :parent)))]
+    (testing "the child's depth -50 stays outside the parent's depth-0 advice"
+      (is (= [:p-a :base :parent :child :p-z] (:log (wf/run parent {})))))))
+
+(deftest advice-add-all-propagates-into-embeds
+  (let [parent (-> (embed (single-step-wf))
+                   (wf/advice-add-all :filter-return ::g #(log % :g)))]
+    (testing "every inner step is wrapped, and so is the embed step itself"
+      (is (= [:p-a :g :base :g :g :p-z :g] (:log (wf/run parent {})))))))
+
+(deftest inheritance-survives-a-scoping-in-fn
+  (let [parent (-> (wf/workflow {:start :p/sub
+                                 :wire-fn (fn [_]
+                                            [(wf/step (single-step-wf)
+                                                      {:in (fn [o] {:n (:n o)})})])})
+                   (wf/advice-add :t/step :filter-return ::p #(log % :p)))]
+    (testing ":in built sub-opts from scratch; the engine re-stamped the registry"
+      (is (= [:base :p] (:log (wf/run parent {:n 1})))))))
+
+(deftest inheritance-is-transitive-through-nested-embeds
+  (let [inner (single-step-wf)
+        mid (wf/workflow {:start :m/sub :wire-fn (fn [_] [(wf/step inner)])})
+        top (-> (wf/workflow {:start :top/sub :wire-fn (fn [_] [(wf/step mid)])})
+                (wf/advice-add :t/step :filter-return ::p #(log % :top)))]
+    (is (= [:base :top] (:log (wf/run top {}))))))
+
+(deftest the-inherited-registry-does-not-leak-into-results
+  (let [parent (-> (embed (single-step-wf))
+                   (wf/advice-add :t/step :filter-return ::p identity))
+        res (wf/run parent {})]
+    (is (not (contains? res :green.workflow/inherited)))))
+
+(deftest advice-plan-shows-the-cross-workflow-stack
+  (let [sub (-> (single-step-wf)
+                (wf/advice-add :t/step :before ::backend identity)
+                (wf/advice-add :t/step :filter-return ::inner identity {:depth 50}))
+        parent (-> (embed sub)
+                   (wf/advice-add :t/step :before ::backend identity)
+                   (wf/advice-add-all :around ::audit (fn [f o] (f o))))]
+    (testing "outermost first, with provenance; the parent's ::backend replaced the child's"
+      (is (= [[::audit :all 0] [::backend :step 0] [::inner :step 1]]
+             (mapv (juxt :id :scope :level) (wf/advice-plan [parent sub] :t/step)))))
+    (testing "a single workflow works too"
+      (is (= [[::backend :step 0] [::inner :step 0]]
+             (mapv (juxt :id :scope :level) (wf/advice-plan sub :t/step)))))))
+
 (deftest advice-add-all-workflow-is-untouched-by-later-adds
   (let [base (two-step-wf)
         g1 (wf/advice-add-all base :filter-return ::g1 #(log % :g1))

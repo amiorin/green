@@ -37,6 +37,11 @@ configuration files, OpenTofu as the muscle.
 - **Composition**: `(wf/step sub-workflow {:in … :out …})` turns a workflow
   into an ordinary step — wire it, advise it, fan it out. See
   `examples/multi-zookeeper` for two clusters built from one cluster workflow.
+- **Advice inheritance**: advice on a parent workflow reaches steps inside
+  embedded sub-workflows — names match flat at any depth, parent advice is
+  outermost, and re-adding a child's advice id from the parent replaces it
+  (e.g. swap the child's default `::backend`). `wf/advice-plan` shows the
+  composed stack for a step, with provenance.
 - `green.scaffold/scaffold` renders **flat file specs** through Selmer; on
   `delete` the same specs name what to remove.
 - `green.tofu/tofu-step` runs `tofu apply`/`destroy` per `:green/event` and

@@ -15,7 +15,12 @@
   - advice-add attaches advice to one step; advice-add-all attaches advice
     to every step. Both stack in strict add order (most recently added,
     from either, is outermost), unless a :depth prop overrides placement
-    (lower = more outward), as in Emacs."
+    (lower = more outward), as in Emacs.
+  - Advice is inherited across `step` embeds: a run stamps its effective
+    advice into opts and a nested run merges it over the child's own —
+    step names match flat at any depth, ancestor advice is outermost, and
+    an ancestor entry replaces a same-id child entry. advice-plan shows
+    the composed stack for a step."
   (:require [green.advice :as advice])
   (:import [java.io PrintWriter StringWriter]))
 
@@ -68,6 +73,58 @@
   [wf id]
   (update wf ::advice-all advice/remove-global-id id))
 
+;; --- advice inheritance across embeds -------------------------------------
+;; A run stamps its effective registries into every step's opts under
+;; ::inherited; `step` forwards the stamp into the nested run, whose
+;; `inherit` merges it over the child's own advice. Inheritance is
+;; transitive because each run stamps its already-merged registries.
+
+(defn- inherit
+  "Merge an `inherited` registry payload {:advice :advice-all} from an
+  enclosing run over `wf`'s own advice: inherited entries stack outside
+  the child's own, and an inherited entry replaces a same-id child entry
+  (per step, or in the all-steps list). Step names are flat — whatever an
+  ancestor advised under a name applies to this workflow's step of that
+  name."
+  [wf inherited]
+  (if-let [{:keys [advice advice-all]} inherited]
+    (let [n (next-seq wf)]
+      (-> wf
+          (update ::advice advice/merge-registry advice n)
+          (update ::advice-all advice/merge-entries advice-all n)))
+    wf))
+
+(defn advice-plan
+  "Debugging: the advice stack that would wrap `step` at run time,
+  outermost first. `wfs` is a single workflow or a chain
+  [outermost ... innermost] — the workflows a run traverses to reach
+  `step` through `green.workflow/step` embeds (e.g. [parent-wf cluster-wf]
+  for an embedded :zk/node). Returns
+  [{:id :how :depth :seq :scope :level} ...] where :scope is :step or
+  :all and :level indexes the chain element that registered the advice
+  (0 = outermost). A child entry replaced by a same-id ancestor entry
+  does not appear."
+  [wfs step]
+  (let [chain (if (map? wfs) [wfs] (vec wfs))
+        tag (fn [wf level]
+              (-> wf
+                  (update ::advice
+                          (fn [m]
+                            (into {} (map (fn [[k es]]
+                                            [k (mapv #(assoc % :scope :step :level level) es)]))
+                              m)))
+                  (update ::advice-all
+                          (fn [es] (mapv #(assoc % :scope :all :level level) es)))))
+        eff (reduce (fn [inherited [level wf]]
+                      (let [wf (inherit (tag wf level) inherited)]
+                        {:advice (::advice wf) :advice-all (::advice-all wf)}))
+                    nil
+                    (map-indexed vector chain))
+        entries (concat (:advice-all eff) (get (:advice eff) step))]
+    (->> (advice/ordered entries)
+         reverse
+         (mapv #(select-keys % [:id :how :depth :seq :scope :level])))))
+
 ;; --- static graph (for join scheduling) ---------------------------------
 
 (defn- static-successors [wire-fn step]
@@ -109,11 +166,15 @@
       (when-not (fn? f)
         (throw (ex-info (str "no function wired for step " step) {:step step})))
       (let [entries (concat (::advice-all wf) (get-in wf [::advice step]))
-            ret ((advice/compose f entries) opts)]
+            ;; stamp the effective registries so an embedded run inherits them
+            stamped (assoc opts ::inherited {:advice (::advice wf)
+                                             :advice-all (::advice-all wf)})
+            ret ((advice/compose f entries) stamped)]
         (when-not (map? ret)
           (throw (ex-info (str "step " step " returned a non-map: " (pr-str ret))
                           {:step step})))
-        (cond-> ret (nil? (:green/exit ret)) (assoc :green/exit 0))))
+        (cond-> (dissoc ret ::inherited)
+          (nil? (:green/exit ret)) (assoc :green/exit 0))))
     (catch Throwable t
       (assoc opts
              :green/exit (or (:green/exit (ex-data t)) 1)
@@ -218,7 +279,7 @@
       [live finished])))
 
 (defn- finalize [finished]
-  (let [terminals (mapv :opts finished)]
+  (let [terminals (mapv #(dissoc (:opts %) ::inherited) finished)]
     (cond
       (empty? terminals) {:green/exit 0}
       (= 1 (count terminals)) (first terminals)
@@ -233,6 +294,11 @@
   it, fan it out. The sub-workflow's :green/exit propagates naturally, and
   ambient keys like :green/event and :green/dry-run flow in with opts.
 
+  The enclosing run's advice is inherited: the nested run merges it over
+  the sub-workflow's own (see the ns docstring). The engine re-stamps the
+  inherited registry after :in runs, so :in may build sub-opts from
+  scratch without severing inheritance.
+
   Options:
     :in  (fn [opts] sub-opts)        — shape the opts entering the sub-workflow
     :out (fn [opts sub-result] opts) — merge the sub-result back into the
@@ -241,14 +307,21 @@
   ([wf] (step wf {}))
   ([wf {:keys [in out]}]
    (fn [opts]
-     (let [result (run wf ((or in identity) opts))]
+     (let [inherited (::inherited opts)
+           sub-opts (cond-> ((or in identity) opts)
+                      inherited (assoc ::inherited inherited))
+           result (run wf sub-opts)]
        (if out (out opts result) result)))))
 
 (defn run
   "Run the workflow from its start step with `opts` as the initial state.
-  Returns the final opts map; its :green/exit is the workflow's exit code."
+  Returns the final opts map; its :green/exit is the workflow's exit code.
+  When `opts` carries an inherited advice registry (stamped by an
+  enclosing run through `step`), it is merged over the workflow's own
+  advice before anything runs."
   [wf opts]
-  (let [g (static-graph (::wire-fn wf) (::start wf))]
+  (let [wf (inherit wf (::inherited opts))
+        g (static-graph (::wire-fn wf) (::start wf))]
     (loop [live [{:step (::start wf) :opts opts :parent ::root :forks []}]
            finished []]
       (if (empty? live)

@@ -55,9 +55,11 @@
 
 (def cluster-wf
   (-> (wf/workflow {:start :zk/start :wire-fn cluster-wire-fn :next-fn cluster-next-fn})
+      ;; the child ships its default backend; a parent can replace it by
+      ;; re-adding advice under the same id (::backend), or redefine
+      ;; :zk/node wholesale with an :override advice
       (wf/advice-add :zk/node :before ::backend
-                     (tofu/local-backend-advice #(node-dir % (:zk/node %))))
-      (dry-run/advise [:zk/node :zk/zoo-cfg])))
+                     (tofu/local-backend-advice #(node-dir % (:zk/node %))))))
 
 ;; --- the higher-level workflow: one cluster-wf run per cluster --------------
 
@@ -85,8 +87,19 @@
     :else (mapv (fn [s] [s opts]) default-next)))
 
 (def workflow
-  (wf/workflow {:start :clusters/start
-                :wire-fn clusters-wire-fn
-                :next-fn clusters-next-fn}))
+  (-> (wf/workflow {:start :clusters/start
+                    :wire-fn clusters-wire-fn
+                    :next-fn clusters-next-fn})
+      ;; cross-workflow advice: :zk/node and :zk/zoo-cfg live inside the
+      ;; embedded cluster-wf, but advice is inherited through wf/step —
+      ;; flat step names reach any depth, parent advice is outermost
+      (wf/advice-add :zk/node :before ::audit
+                     (fn [opts]
+                       (println "node" (get-in opts [:zk/node :name])
+                                "of cluster" (get-in opts [:zk/cluster :name]))))
+      ;; dry-run for the whole composition, declared once at the top;
+      ;; inspect the resulting stack with e.g.
+      ;;   (wf/advice-plan [workflow cluster-wf] :zk/node)
+      (dry-run/advise [:zk/node :zk/zoo-cfg])))
 
 (cli/exec workflow)
