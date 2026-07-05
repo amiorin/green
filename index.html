@@ -49,7 +49,7 @@
 <body>
 <main>
 
-<h1>green <span class="v">specification · v1 · 2026-07-03</span></h1>
+<h1>green <span class="v">specification · v1 · 2026-07-05</span></h1>
 <p class="tagline">A babashka-compatible Clojure library for building idempotent devops CLIs: desired state in EDN, workflows as data-threading step graphs, Selmer-scaffolded configuration, OpenTofu as the muscle.</p>
 
 <div class="toc">
@@ -84,17 +84,18 @@
 <table>
 <tr><th>Key</th><th>Type</th><th>Meaning</th></tr>
 <tr><td><code>:green/event</code></td><td>keyword</td><td>The lifecycle event, stamped by the CLI from the first positional argument (<code>:create</code>, <code>:delete</code>, … — an open set; those two are conventions, not an enum). Steps branch on it.</td></tr>
-<tr><td><code>:green/exit</code></td><td>int</td><td>Outcome of the last step: <code>0</code> success, <code>&gt; 0</code> error. If a step returns a map without it, the runner sets it to <code>0</code>. The workflow's final value becomes the process exit code.</td></tr>
+<tr><td><code>:green/dry-run</code></td><td>boolean</td><td>Stamped by the CLI's <code>--dry-run</code> flag when present; dry-run advice uses it to skip side-effecting steps.</td></tr>
+<tr><td><code>:green/exit</code></td><td>int</td><td>Outcome of the last step: <code>0</code> success, <code>&gt; 0</code> error. If a step returns a map without it, the runner sets it to <code>0</code>. The workflow's final <code>:green/exit</code> value becomes the process exit code.</td></tr>
 <tr><td><code>:green/err</code></td><td>string</td><td>Error message. Present when <code>:green/exit &gt; 0</code>.</td></tr>
 <tr><td><code>:green/trace</code></td><td>string</td><td>Stack trace. Present when the failure came from a thrown exception.</td></tr>
-<tr><td><code>:green/branches</code></td><td>vector of maps</td><td>At a join step: the resulting <code>opts</code> of every parallel branch, in arrival order.</td></tr>
+<tr><td><code>:green/branches</code></td><td>vector of maps</td><td>At a join step (or a collapsed failed fork): the resulting <code>opts</code> of every parallel branch. Treat it as a collection; sort by your own key when order matters.</td></tr>
 </table>
 
 <h2 id="steps">3. Steps</h2>
 <p>A step is a plain Clojure function from <code>opts</code> to <code>opts</code>, identified by a <strong>qualified name</strong> (e.g. <code>:zk/node</code>). The qualified name is the anchor for wiring, logging, CLI slices, and advice.</p>
 <ul>
-  <li>Steps are <strong>event-aware</strong>: the same <code>:infra/tofu</code> step runs <code>tofu apply -auto-approve</code> when <code>:green/event</code> is <code>:create</code> and <code>tofu destroy -auto-approve</code> when it is <code>:delete</code>.</li>
-  <li>Steps signal failure by returning <code>:green/exit &gt; 0</code>, or by simply throwing: the runner wraps every step (including its advice stack) in try/catch and converts a throw into <code>:green/exit 1</code> + <code>:green/err</code> + <code>:green/trace</code>. Nothing escapes the contract.</li>
+  <li>Steps are <strong>event-aware</strong>: the same <code>:infra/tofu</code> step runs <code>tofu apply -auto-approve</code> for any non-<code>:delete</code> event and <code>tofu destroy -auto-approve</code> when <code>:green/event</code> is <code>:delete</code>.</li>
+  <li>Steps signal failure by returning <code>:green/exit &gt; 0</code>, or by simply throwing: the runner wraps every step (including its advice stack) in try/catch and converts a throw into <code>:green/exit 1</code> (or the <code>:green/exit</code> in exception data) + <code>:green/err</code> + <code>:green/trace</code>. Nothing escapes the contract.</li>
   <li>A step returning a non-map is an error and is converted the same way.</li>
 </ul>
 
@@ -142,8 +143,8 @@
 
 <h3>Termination &amp; slices</h3>
 <ul>
-  <li>A branch terminates when its next step is <code>nil</code> — wire-fn lists no successor (and no next-fn overrides), or next-fn returns empty.</li>
-  <li>Without next-fn, a step with <code>:green/exit &gt; 0</code> halts the workflow at once; that code is the final one.</li>
+  <li>A branch terminates when there is no next step — wire-fn lists no successor (and no next-fn overrides), or next-fn returns empty.</li>
+  <li>Without next-fn, a step with <code>:green/exit &gt; 0</code> stops that path; in a fork, in-flight siblings finish their current step and the fork collapses without running the join.</li>
   <li>The optional <strong>end step is a slice boundary</strong>: it runs, then the workflow stops regardless of wiring. Together with <code>--start</code>/<code>--end</code> on the CLI, any slice of the graph can be re-run — idempotency makes that safe.</li>
 </ul>
 
@@ -162,20 +163,27 @@
 <div class="note"><strong>Limitation (v1).</strong> Convergence is detected by step name: branches arriving at the same qualified name join there. The scheduler holds a branch back from a join while any other live branch can still statically reach it (via wire-fn edges), so branches of different lengths join correctly. Dynamic next-fn detours invisible to the static graph may not be awaited.</div>
 
 <h2 id="advice">6. Advice</h2>
-<p>green ports Emacs' <code>advice-add</code>/<code>advice-remove</code> to steps, keyed by qualified step name. Advice is <strong>workflow-scoped and pure</strong>: adding or removing returns a new workflow value — no global registry, no teardown in tests.</p>
+<p>green ports Emacs' <code>advice-add</code>/<code>advice-remove</code> to step functions and adds <code>wf/advice-add-all</code>/<code>wf/advice-remove-all</code> for all-steps advice. Advice is <strong>workflow-scoped and pure</strong>: adding or removing returns a new workflow value — no process-global registry, no teardown in tests.</p>
 <pre><code>(-> workflow
-    (wf/advice-add :zk/node :before ::backend write-backend!)  ;; =&gt; new workflow
-    (wf/advice-remove :zk/node ::backend))                     ;; =&gt; without it</code></pre>
+    (wf/advice-add :zk/node :before ::backend write-backend!)      ;; one step
+    (wf/advice-add-all :around ::audit (fn [f opts] (f opts)))    ;; every step
+    (wf/advice-remove :zk/node ::backend)
+    (wf/advice-remove-all ::audit))</code></pre>
 <table>
 <tr><th>Combinator</th><th>Effect (base <code>f</code>, advice <code>a</code>, input <code>opts</code>)</th></tr>
 <tr><td><code>:around</code></td><td><code>(a f opts)</code> — full control; <code>a</code> decides if/how to call <code>f</code>.</td></tr>
 <tr><td><code>:override</code></td><td><code>(a opts)</code> — replaces <code>f</code> entirely.</td></tr>
 <tr><td><code>:before</code></td><td><code>(a opts)</code> for side effects (return ignored), then <code>(f opts)</code>.</td></tr>
-<tr><td><code>:after</code></td><td><code>(f opts)</code>, then <code>(a result)</code> for side effects (return ignored).</td></tr>
+<tr><td><code>:after</code></td><td><code>(f opts)</code>, then <code>(a opts)</code> for side effects (return ignored); <code>f</code>'s return flows out.</td></tr>
+<tr><td><code>:before-while</code></td><td><code>(and (a opts) (f opts))</code> — run inward only while advice returns truthy.</td></tr>
+<tr><td><code>:before-until</code></td><td><code>(or (a opts) (f opts))</code> — short-circuit with the advice result when it is truthy.</td></tr>
+<tr><td><code>:after-while</code></td><td><code>(and (f opts) (a opts))</code> — run advice only when the inward result is truthy.</td></tr>
+<tr><td><code>:after-until</code></td><td><code>(or (f opts) (a opts))</code> — use advice as a fallback when the inward result is falsey.</td></tr>
 <tr><td><code>:filter-args</code></td><td><code>(f (a opts))</code> — transform the input map.</td></tr>
 <tr><td><code>:filter-return</code></td><td><code>(a (f opts))</code> — transform the result map.</td></tr>
 </table>
-<p>The exotic Emacs combinators (<code>:before-while</code>, <code>:after-until</code>, …) are deliberately omitted. Stacking is Emacs-like — <strong>LIFO, most recently added outermost</strong>. Every advice carries an <strong>explicit id</strong>; removal is by id (re-adding an existing id replaces it and moves it to the top of the stack). The advice stack runs inside the runner's try/catch: a throwing advice fails the step through the normal <code>:green/*</code> contract.</p>
+<p>Stacking is Emacs-like: at equal <code>:depth</code>, the most recently added advice is outermost, and per-step/all-steps entries interleave in that single add order. A <code>:depth</code> property (-100..100, default 0) overrides add order: lower depths run farther outside, higher depths farther inside. Every advice carries an explicit <code>:id</code>; re-adding the same id replaces the old entry and removal is by id. The advice stack runs inside the runner's try/catch: a throwing advice fails the step through the normal <code>:green/*</code> contract.</p>
+<p><strong>Advice inheritance through composed workflows.</strong> When a workflow is embedded with <code>wf/step</code>, the enclosing run's effective advice is inherited by the nested run. Step names match flat at any depth: parent advice for <code>:zk/node</code> reaches an embedded workflow's <code>:zk/node</code>. At equal depth, inherited advice stacks outside the child's own advice; a parent entry with the same <code>:id</code> replaces the child entry, and explicit <code>:depth</code> can intentionally change the placement. Use <code>wf/advice-plan</code> with a workflow or workflow chain (for example <code>[parent-wf cluster-wf]</code>) to inspect the composed stack with provenance.</p>
 <p>green dogfoods this twice:</p>
 <ul>
   <li><strong>Backends</strong> — the OpenTofu backend is not hardwired: a <code>:before</code> advice writes the backend config into the working directory before the tofu step runs (local filesystem by default; S3/GCS are alternative advices, see §8). Swapping backends means swapping one advice.</li>
@@ -199,16 +207,16 @@
 <tr><td><code>:data</code></td><td>The map given to Selmer for both the template body and the target path.</td></tr>
 </table>
 <p><code>scaffold</code> is <strong>event-aware</strong>: on <code>:green/event :delete</code> it removes the targets (pruning directories it emptied) instead of rendering them — the same specs that create the files name what to remove. Rendering is idempotent: same specs, same bytes.</p>
-<p>Why flat specs (and not a nested tree): they're ordinary data built with ordinary seq functions; <code>(map :target specs)</code> is the manifest for <code>delete</code> and dry-runs; per-branch specs from a fan-out just <code>concat</code>.</p>
+<p>Why flat specs (and not a nested tree): they're ordinary data built with ordinary seq functions; the Selmer-rendered targets are the manifest for <code>delete</code> and dry-runs; per-branch specs from a fan-out just <code>concat</code>.</p>
 
 <h2 id="tofu">8. OpenTofu integration</h2>
 <pre><code>(require '[green.tofu :as tofu])
 
 (tofu/tofu-step opts {:dir "work/nodes/1"})        ;; :output-key optional</code></pre>
 <ul>
-  <li><code>:create</code> (any non-delete event): <code>tofu init</code>, then <code>tofu apply -auto-approve</code>; afterwards <code>tofu output -json</code> is parsed and merged into opts <strong>under a namespaced key</strong> — <code>:tofu/outputs</code> by default (never top-level; the desired state stays uncontaminated).</li>
+  <li>Any non-<code>:delete</code> event (conventionally <code>:create</code>): <code>tofu init</code>, then <code>tofu apply -auto-approve</code>; afterwards <code>tofu output -json</code> is parsed and assoc'd into opts <strong>under a namespaced key</strong> — <code>:tofu/outputs</code> by default (never top-level; the desired state stays uncontaminated).</li>
   <li><code>:delete</code>: <code>tofu init</code>, then <code>tofu destroy -auto-approve</code>.</li>
-  <li>Non-zero tofu exits become <code>:green/exit</code> with stderr in <code>:green/err</code>.</li>
+  <li>Non-zero tofu exits become <code>:green/exit</code> with stderr/stdout in <code>:green/err</code>.</li>
   <li><strong>Backends are advices</strong> (see §6): <code>green.tofu/backend-advice</code> builds a <code>:before</code> advice writing <code>backend.tf</code> into the directory — backend type plus a flat attribute map (or a function of opts returning one). <code>local-backend-advice</code> (the default), <code>s3-backend-advice</code> (<code>{:bucket :key :region …}</code>), and <code>gcs-backend-advice</code> (<code>{:bucket :prefix}</code>) are the shipped variants.</li>
 </ul>
 
@@ -237,7 +245,7 @@
 (cli/exec workflow)                ;; forwards *command-line-args*, exits</code></pre>
 
 <h2 id="testing">10. Testing strategy</h2>
-<p>End-to-end tests run the <em>real</em> pipeline against <strong>resource-free OpenTofu configs</strong> — HCL containing only <code>locals</code> and <code>output</code> blocks. <code>tofu apply</code> creates nothing real, needs no credentials, and finishes in milliseconds, yet exercises genuine render → apply → outputs → assert cycles, plus <code>destroy</code> for <code>delete</code>.</p>
+<p>End-to-end tests run the <em>real</em> pipeline against <strong>resource-free OpenTofu configs</strong> when <code>tofu</code> is on <code>PATH</code> — HCL containing only <code>locals</code> and <code>output</code> blocks. <code>tofu apply</code> creates nothing real, needs no credentials, and finishes in milliseconds, yet exercises genuine render → apply → outputs → assert cycles, plus <code>destroy</code> for <code>delete</code>.</p>
 <h3>Flagship scenario: the fake ZooKeeper cluster</h3>
 <ol>
   <li><code>green.edn</code> declares the cluster: servers with id, name, IP, plus a work directory.</li>
@@ -253,10 +261,10 @@
 ├── deps.edn            JVM deps: selmer, babashka/cli, cheshire (+ :test, :build)
 ├── bb.edn              paths + `bb test` task
 ├── build.clj           tools.build: clean / jar / install / deploy
-├── doc/spec.html       this document
+├── index.html          this specification
 ├── src/green/
-│   ├── workflow.clj    workflow, run, advice-add, advice-remove
-│   ├── advice.clj      combinators, LIFO composition (pure registry ops)
+│   ├── workflow.clj    workflow, run, step, advice add/remove/all, advice-plan
+│   ├── advice.clj      nadvice combinators, depth ordering (pure registry ops)
 │   ├── scaffold.clj    scaffold, template resolution
 │   ├── tofu.clj        tofu-step, outputs, backend advices (local/s3/gcs)
 │   ├── dry_run.clj     dry-run advice + advise
@@ -277,10 +285,14 @@
 <tr><th>Function</th><th>Signature</th></tr>
 <tr><td><code>green.workflow/workflow</code></td><td><code>{:start :end :wire-fn :next-fn} → workflow</code></td></tr>
 <tr><td><code>green.workflow/run</code></td><td><code>workflow, opts → final opts</code></td></tr>
-<tr><td><code>green.workflow/advice-add</code></td><td><code>workflow, step, how, id, f → workflow</code></td></tr>
+<tr><td><code>green.workflow/advice-add</code></td><td><code>workflow, step, how, id, f [, props] → workflow</code></td></tr>
 <tr><td><code>green.workflow/advice-remove</code></td><td><code>workflow, step, id → workflow</code></td></tr>
+<tr><td><code>green.workflow/advice-add-all</code></td><td><code>workflow, how, id, f [, props] → workflow</code></td></tr>
+<tr><td><code>green.workflow/advice-remove-all</code></td><td><code>workflow, id → workflow</code></td></tr>
+<tr><td><code>green.workflow/advice-plan</code></td><td><code>workflow-or-chain, step → advice stack</code></td></tr>
 <tr><td><code>green.workflow/step</code></td><td><code>workflow [, {:in :out}] → step fn (composition)</code></td></tr>
 <tr><td><code>green.scaffold/scaffold</code></td><td><code>opts, specs → opts</code></td></tr>
+<tr><td><code>green.tofu/outputs</code></td><td><code>dir → outputs map</code></td></tr>
 <tr><td><code>green.tofu/tofu-step</code></td><td><code>opts, {:dir :output-key} → opts</code></td></tr>
 <tr><td><code>green.tofu/backend-advice</code></td><td><code>(opts → dir), type, config → before-advice</code></td></tr>
 <tr><td><code>green.tofu/local-backend-advice</code></td><td><code>(opts → dir) [, config] → before-advice</code></td></tr>
@@ -289,7 +301,7 @@
 <tr><td><code>green.dry-run/advice</code></td><td><code>step → around-advice</code></td></tr>
 <tr><td><code>green.dry-run/advise</code></td><td><code>workflow, steps → workflow</code></td></tr>
 <tr><td><code>green.cli/run-cli</code></td><td><code>workflow, args → final opts</code></td></tr>
-<tr><td><code>green.cli/exec</code></td><td><code>workflow (&amp; args) → exits process</code></td></tr>
+<tr><td><code>green.cli/exec</code></td><td><code>workflow [, args] → exits process</code></td></tr>
 </table>
 
 </main>

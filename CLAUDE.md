@@ -7,8 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `green` is a babashka-compatible Clojure library for building idempotent
 devops CLIs: desired state in EDN, workflows as step graphs threaded by a
 map, Selmer-scaffolded config files, OpenTofu as the muscle. The full
-specification lives in `index.html` (open it in a browser; the README's
-reference to `doc/spec.html` is aliased to this same file).
+specification lives in `index.html` (open it in a browser).
 
 ## Commands
 
@@ -31,7 +30,7 @@ Try the examples end-to-end:
 
 ```sh
 cd examples/zookeeper
-./green create --dry-run   # print the plan-of-record, touch nothing
+./green create --dry-run   # print what would run, touch nothing
 ./green create             # fake 3-node ZooKeeper cluster in ./work
 ./green delete
 
@@ -44,15 +43,15 @@ Each example's `./green` script is a self-contained babashka script that
 pulls in `green` via `:local/root "../.."` — no separate build step needed
 to try changes made to `src/`.
 
-The end-to-end test suite (`test/green/zookeeper_test.clj`, `tofu_test.clj`)
-drives real `tofu` over HCL containing only `locals`/`output` blocks — full
-render/apply/destroy cycles, zero real infrastructure, but `tofu` must be on
-`PATH`.
+The end-to-end ZooKeeper suite (`test/green/zookeeper_test.clj`) drives real
+`tofu` over HCL containing only `locals`/`output` blocks — full
+render/apply/destroy cycles, zero real infrastructure — and skips when `tofu`
+is not on `PATH`. `test/green/tofu_test.clj` covers backend advice without
+invoking `tofu`.
 
 ## Architecture
 
-Five namespaces under `src/green/`, layered so each only depends on the ones
-below it:
+Six main namespaces under `src/green/`:
 
 - **`workflow.clj`** — the engine. A **step** is a plain function
   `opts -> opts`, named by a qualified keyword. A `wire-fn` (`step ->
@@ -73,33 +72,36 @@ below it:
 - **`advice.clj`** — Emacs `nadvice`-style combinators (`:around`,
   `:before`, `:after`, `:override`, `:before-while`, `:before-until`,
   `:after-while`, `:after-until`, `:filter-args`, `:filter-return`) for
-  wrapping step functions without touching the wiring. Advice stacks in
-  strict add order (most recently added is outermost) unless a `:depth`
-  prop (-100..100) overrides placement, exactly like Emacs hook depths.
-  Registries are plain immutable maps — advice is workflow-scoped, not
-  global, and all operations (`add`, `remove-id`, `merge-entries`, ...)
-  are pure.
+  wrapping step functions without touching the wiring. `wf/advice-add`
+  targets one step; `wf/advice-add-all` targets every step. Advice stacks
+  in strict add order across both registries (most recently added is
+  outermost) unless a `:depth` prop (-100..100) overrides placement,
+  exactly like Emacs hook depths. Registries are plain immutable values —
+  advice is workflow-scoped, not process-global, and all operations (`add`,
+  `remove-id`, `merge-entries`, ...) are pure.
   **Advice inheritance across `wf/step` embeds** is the trickiest part of
   the engine: a run stamps its effective registries into opts under a
   private key, the nested run merges them over its own via
   `merge-registry`/`merge-entries`, and this is transitive through nested
   embeds. Step names match flat at any depth — an ancestor's advice on a
-  step name reaches an embedded sub-workflow's step of that name, and an
-  ancestor entry with the same `:id` replaces a child's (e.g. swapping a
-  sub-workflow's default backend advice from the parent). Use
+  step name reaches an embedded sub-workflow's step of that name. At equal
+  `:depth`, ancestor advice stacks outside child advice; an ancestor entry
+  with the same `:id` replaces a child's (e.g. swapping a sub-workflow's
+  default backend advice from the parent). Use
   `wf/advice-plan` to inspect the composed stack for a step, with
   provenance (`:scope :step`/`:all`, `:level` = chain depth).
 - **`scaffold.clj`** — a flat file-spec DSL: a seq of
   `{:template :ns/file :target "path" :data {...}}` maps rendered through
   Selmer from classpath resources. On `:green/event :delete` the same
   specs name what to remove (with empty-parent-dir pruning).
-- **`tofu.clj`** — event-aware OpenTofu steps: `:create` → `init` +
-  `apply` (merging `tofu output -json` back into opts under a namespaced
-  key, never top-level), `:delete` → `init` + `destroy`. Backends are not
+- **`tofu.clj`** — event-aware OpenTofu steps: any non-`:delete` event
+  (conventionally `:create`) → `init` + `apply` (assoc'ing
+  `tofu output -json` back into opts under a namespaced key, never
+  top-level), `:delete` → `init` + `destroy`. Backends are not
   hardwired — they're attached as `:before` advice
   (`local-backend-advice`/`s3-backend-advice`/`gcs-backend-advice`) that
   writes `backend.tf` before the step runs.
-- **`dry-run.clj`** — dry-run is built on the advice facility rather than
+- **`dry_run.clj`** — dry-run is built on the advice facility rather than
   hardwired into steps: `dry-run/advise` attaches `:around` advice (id
   `::skip`) to a list of steps; when `:green/dry-run` is set (stamped by
   the CLI's `--dry-run` flag) the step prints what it would do and is
@@ -120,6 +122,7 @@ below it:
   `:green/event`, `:green/dry-run`, `:green/branches`); everything
   project- or library-specific uses its own namespace
   (`:zk/servers`, `:tofu/outputs`, `:green.scaffold/written`, ...).
-- Every public workflow/advice-mutating function (`advice-add`, `step`,
-  etc.) is pure — it returns a new workflow value rather than mutating one,
-  so workflows are safe to branch and share.
+- Every public workflow constructor/advice-transforming function (`workflow`,
+  `advice-add`, `advice-add-all`, `step`, etc.) is pure — it returns a new
+  workflow value or step function rather than mutating one, so workflows are
+  safe to branch and share.
