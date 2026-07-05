@@ -66,6 +66,7 @@
   <li><a href="#scaffold">The scaffolding DSL</a></li>
   <li><a href="#tofu">OpenTofu integration</a></li>
   <li><a href="#cli">The CLI</a></li>
+  <li><a href="#examples">Examples</a></li>
   <li><a href="#testing">Testing strategy</a></li>
   <li><a href="#layout">Project layout &amp; API index</a></li>
 </ol>
@@ -187,9 +188,10 @@
 <p>For <code>:after-while</code> and <code>:after-until</code>, <code>green-true?</code> adapts Green's step contract to boolean advice semantics: a map with missing or zero <code>:green/exit</code> is true, while a positive <code>:green/exit</code> is false. Non-map values passed to <code>green.advice/compose</code> directly keep ordinary Clojure truthiness.</p>
 <p>Stacking is Emacs-like: at equal <code>:depth</code>, the most recently added advice is outermost, and per-step/all-steps entries interleave in that single add order. A <code>:depth</code> property (-100..100, default 0) overrides add order: lower depths run farther outside, higher depths farther inside. Every advice carries an explicit <code>:id</code>; re-adding the same id replaces the old entry and removal is by id. The advice stack runs inside the runner's try/catch: a throwing advice fails the step through the normal <code>:green/*</code> contract.</p>
 <p><strong>Advice inheritance through composed workflows.</strong> When a workflow is embedded with <code>wf/step</code>, the enclosing run's effective advice is inherited by the nested run. Step names match flat at any depth: parent advice for <code>:zk/node</code> reaches an embedded workflow's <code>:zk/node</code>. At equal depth, inherited advice stacks outside the child's own advice; a parent entry with the same <code>:id</code> replaces the child entry, and explicit <code>:depth</code> can intentionally change the placement. Use <code>wf/advice-plan</code> with a workflow or workflow chain (for example <code>[parent-wf cluster-wf]</code>) to inspect the composed stack with provenance.</p>
-<p>green dogfoods this twice:</p>
+<p>The library and examples dogfood advice heavily:</p>
 <ul>
   <li><strong>Backends</strong> — the OpenTofu backend is not hardwired: a <code>:before</code> advice writes the backend config into the working directory before the tofu step runs (the examples use the local-filesystem helper; S3/GCS helpers are alternatives, see §8). Swapping backends means swapping one advice.</li>
+  <li><strong>Provider swaps</strong> — <code>examples/once</code> keeps <code>:once/compute</code> provider-agnostic; a <code>:before</code> advice writes either the <code>digitalocean-mock</code> or <code>oci-mock</code> HCL, both emitting the same <code>{:ip :name :sudoer :user :uid}</code> contract. Swapping clouds is the same re-add-under-one-id move as swapping backends.</li>
   <li><strong>Dry-run</strong> — <code>green.dry-run/advise</code> attaches an <code>:around</code> advice (id <code>:green.dry-run/skip</code>) to the side-effecting steps you name; when <code>:green/dry-run</code> is set (the CLI's <code>--dry-run</code> flag), those steps print <code>dry-run: would run :zk/node (create)</code> and are skipped with exit 0 — the rest of the graph still threads through.</li>
 </ul>
 
@@ -247,7 +249,30 @@
 
 (cli/exec workflow)                ;; forwards *command-line-args*, exits</code></pre>
 
-<h2 id="testing">10. Testing strategy</h2>
+<h2 id="examples">10. Examples</h2>
+<p>Every example is a self-contained babashka CLI that depends on this checkout via <code>:local/root "../.."</code>, adds its own <code>resources</code> directory to the classpath, and then calls <code>cli/exec</code>. Non-dry-run runs require <code>tofu</code> on <code>PATH</code>; the HCL is mock-only (<code>locals</code>/<code>output</code>), so no real infrastructure or credentials are needed.</p>
+<table>
+<tr><th>Path</th><th>What it teaches</th></tr>
+<tr><td><code>examples/zookeeper</code></td><td>Dynamic fan-out from desired state, a join at <code>:zk/zoo-cfg</code>, Selmer scaffolding plus OpenTofu, backend-as-advice, and dry-run advice.</td></tr>
+<tr><td><code>examples/multi-zookeeper</code></td><td>Workflow composition: <code>wf/step</code> turns the ZooKeeper cluster workflow into a step, the parent fans it out once per cluster, and parent advice is inherited by the embedded workflow.</td></tr>
+<tr><td><code>examples/once</code></td><td>A Basecamp ONCE-style single-VPS PaaS. It demonstrates provider-swap advice on <code>:once/compute</code> (DigitalOcean mock vs OCI mock with one output contract), a genuine fork/join (<code>compute ∥ smtp → dns → smtp-post</code>), opts threaded front-to-back, isolated tofu state per step, and scaffold-only Ansible files. See <code>examples/once/SPEC.md</code> for the full walkthrough.</td></tr>
+</table>
+<pre><code>cd examples/zookeeper
+./green create --dry-run
+./green create
+./green delete
+
+cd ../multi-zookeeper
+./green create --dry-run
+./green create
+./green delete
+
+cd ../once
+./green create --dry-run
+./green create
+./green delete</code></pre>
+
+<h2 id="testing">11. Testing strategy</h2>
 <p>End-to-end tests run the <em>real</em> pipeline against <strong>resource-free OpenTofu configs</strong> when <code>tofu</code> is on <code>PATH</code> — HCL containing only <code>locals</code> and <code>output</code> blocks. <code>tofu apply</code> creates nothing real, needs no credentials, and finishes in milliseconds, yet exercises genuine render → apply → outputs → assert cycles, plus <code>destroy</code> for <code>delete</code>.</p>
 <h3>Flagship scenario: the fake ZooKeeper cluster</h3>
 <ol>
@@ -259,7 +284,7 @@
 </ol>
 <p>The suite runs under babashka (<code>bb test</code>) and the JVM (<code>clojure -X:test</code>), keeping the bb-compatibility promise honest.</p>
 
-<h2 id="layout">11. Project layout &amp; API index</h2>
+<h2 id="layout">12. Project layout &amp; API index</h2>
 <pre><code>green/
 ├── deps.edn            JVM deps: selmer, babashka/cli, cheshire (+ :test, :build)
 ├── bb.edn              paths + `bb test` task
@@ -275,7 +300,8 @@
 ├── test/green/         advice, workflow, scaffold, cli, dry-run, tofu, zookeeper
 ├── test-resources/     zk/main.tf, zk/zoo.cfg, … (qualified-namespace layout)
 ├── examples/zookeeper/ self-contained ./green script + green.edn + resources
-└── examples/multi-zookeeper/ two clusters composed from one workflow (wf/step)</code></pre>
+├── examples/multi-zookeeper/ two clusters composed from one workflow (wf/step)
+└── examples/once/      ONCE-style single-VPS PaaS; provider swap + Ansible scaffolds</code></pre>
 
 <h3>Distribution</h3>
 <p>Library coordinate: <code>io.github.amiorin/green</code>, version <code>0.1.0</code>.</p>

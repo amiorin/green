@@ -81,6 +81,15 @@ Publishing: `clojure -T:build jar` (or `install` / `deploy`; deploy reads
 
 Non-dry-run example runs require `tofu` on `PATH`; `--dry-run` only prints.
 
+- `examples/zookeeper` — dynamic fan-out/join, scaffold + tofu,
+  backend-as-advice, dry-run.
+- `examples/multi-zookeeper` — workflow composition with `wf/step` and advice
+  inheritance across the composed boundary.
+- `examples/once` — a Basecamp ONCE-style single-VPS PaaS: provider-swap
+  advice for compute, a real fork/join (`compute ∥ smtp → dns → smtp-post`),
+  threaded opts, per-step tofu state, and scaffold-only Ansible config. See
+  `examples/once/SPEC.md` for the full walkthrough.
+
 ```sh
 cd examples/zookeeper
 ./green create --dry-run   # print what would run, touch nothing
@@ -88,7 +97,13 @@ cd examples/zookeeper
 ./green delete
 
 cd ../multi-zookeeper
+./green create --dry-run   # inherited dry-run advice across wf/step
 ./green create             # two clusters, one composed workflow, in parallel
+./green delete
+
+cd ../once
+./green create --dry-run   # provider/DNS/SMTP/Ansible steps are skipped
+./green create             # fake ONCE-style VPS + DNS/SMTP + Ansible scaffolds
 ./green delete
 ```
 

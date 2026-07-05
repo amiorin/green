@@ -36,13 +36,21 @@ cd examples/zookeeper
 ./green delete
 
 cd ../multi-zookeeper
+./green create --dry-run   # inherited dry-run advice across wf/step
 ./green create             # two clusters, one composed workflow, in parallel
+./green delete
+
+cd ../once
+./green create --dry-run   # print what would run, touch nothing
+./green create             # fake ONCE-style VPS, DNS/SMTP, and Ansible scaffolds
 ./green delete
 ```
 
 Each example's `./green` script is a self-contained babashka script that
 pulls in `green` via `:local/root "../.."` — no separate build step needed
-to try changes made to `src/`.
+to try changes made to `src/`. `examples/once/SPEC.md` documents the ONCE-style
+example: provider-swap advice for compute, a `compute ∥ smtp → dns` fork/join,
+threaded opts, per-step tofu state, and scaffold-only Ansible config.
 
 The end-to-end ZooKeeper suite (`test/green/zookeeper_test.clj`) drives real
 `tofu` over HCL containing only `locals`/`output` blocks — full
