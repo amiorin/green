@@ -24,10 +24,14 @@
     :override      (FUNCTION r), OLDFUN never runs
     :before-while  (and (FUNCTION r) (OLDFUN r))
     :before-until  (or  (FUNCTION r) (OLDFUN r))
-    :after-while   (and (OLDFUN r) (FUNCTION r))
-    :after-until   (or  (OLDFUN r) (FUNCTION r))
+    :after-while   (let [ret (OLDFUN r)] (if (green-true? ret) (FUNCTION r) ret))
+    :after-until   (let [ret (OLDFUN r)] (if (green-true? ret) ret (FUNCTION r)))
     :filter-args   (OLDFUN (FUNCTION r))
-    :filter-return (FUNCTION (OLDFUN r))"
+    :filter-return (FUNCTION (OLDFUN r))
+
+  For after-while/after-until, a Green step result is true only when its
+  :green/exit is 0 (missing means 0); a positive :green/exit is false.
+  Non-map returns keep ordinary Clojure truthiness for compose-level use."
   #{:around :before :after :override
     :before-while :before-until :after-while :after-until
     :filter-args :filter-return})
@@ -83,6 +87,15 @@
                (update reg step merge-entries entries offset))
              (or inner {}) outer))
 
+(defn- green-true?
+  "Truth predicate for Green step returns: success is true, failure is false.
+  Compose can also be used directly with non-map values, where ordinary
+  Clojure truthiness is preserved."
+  [ret]
+  (if (map? ret)
+    (zero? (or (:green/exit ret) 0))
+    (boolean ret)))
+
 (defn- wrap [how a base]
   (case how
     :around        (fn [opts] (a base opts))
@@ -91,8 +104,12 @@
     :after         (fn [opts] (let [ret (base opts)] (a opts) ret))
     :before-while  (fn [opts] (and (a opts) (base opts)))
     :before-until  (fn [opts] (or (a opts) (base opts)))
-    :after-while   (fn [opts] (and (base opts) (a opts)))
-    :after-until   (fn [opts] (or (base opts) (a opts)))
+    :after-while   (fn [opts]
+                     (let [ret (base opts)]
+                       (if (green-true? ret) (a opts) ret)))
+    :after-until   (fn [opts]
+                     (let [ret (base opts)]
+                       (if (green-true? ret) ret (a opts))))
     :filter-args   (fn [opts] (base (a opts)))
     :filter-return (fn [opts] (a (base opts)))))
 

@@ -161,6 +161,36 @@
     (is (= [:base :old] @seen)
         "base first, then oldest advice; its nil skips the newer one")))
 
+(deftest after-while-and-after-until-use-green-exit-as-truth
+  (testing ":after-while does not run after a failing step result"
+    (let [seen (atom [])
+          f (advice/compose (fn [o]
+                              (swap! seen conj :base)
+                              (assoc (log o :base) :green/exit 7))
+                            [(entry :after-while
+                                    (fn [o]
+                                      (swap! seen conj :after)
+                                      (assoc (log o :after) :green/exit 0))
+                                    0)])
+          ret (f {})]
+      (is (= 7 (:green/exit ret)))
+      (is (= [:base] (:log ret)))
+      (is (= [:base] @seen))))
+  (testing ":after-until falls through to advice after a failing step result"
+    (let [seen (atom [])
+          f (advice/compose (fn [o]
+                              (swap! seen conj :base)
+                              (assoc (log o :base) :green/exit 7))
+                            [(entry :after-until
+                                    (fn [o]
+                                      (swap! seen conj :recover)
+                                      (assoc (log o :recover) :green/exit 0))
+                                    0)])
+          ret (f {})]
+      (is (= 0 (:green/exit ret)))
+      (is (= [:recover] (:log ret)))
+      (is (= [:base :recover] @seen)))))
+
 (deftest after-until-supplies-a-result-when-the-chain-returns-nil
   (testing "compose level: advice only fires when the inward call is nil"
     (let [f (advice/compose (fn [_] nil)
