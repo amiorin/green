@@ -170,17 +170,17 @@
     (wf/advice-remove :zk/node ::backend)
     (wf/advice-remove-all ::audit))</code></pre>
 <table>
-<tr><th>Combinator</th><th>Effect (base <code>f</code>, advice <code>a</code>, input <code>opts</code>)</th></tr>
-<tr><td><code>:around</code></td><td><code>(a f opts)</code> — full control; <code>a</code> decides if/how to call <code>f</code>.</td></tr>
-<tr><td><code>:override</code></td><td><code>(a opts)</code> — replaces <code>f</code> entirely.</td></tr>
-<tr><td><code>:before</code></td><td><code>(a opts)</code> for side effects (return ignored), then <code>(f opts)</code>.</td></tr>
-<tr><td><code>:after</code></td><td><code>(f opts)</code>, then <code>(a opts)</code> for side effects (return ignored); <code>f</code>'s return flows out.</td></tr>
-<tr><td><code>:before-while</code></td><td><code>(and (a opts) (f opts))</code> — run inward only while advice returns truthy.</td></tr>
-<tr><td><code>:before-until</code></td><td><code>(or (a opts) (f opts))</code> — short-circuit with the advice result when it is truthy.</td></tr>
-<tr><td><code>:after-while</code></td><td><code>(let [ret (f opts)] (if (green-true? ret) (a opts) ret))</code> — run advice only when the inward result is successful.</td></tr>
-<tr><td><code>:after-until</code></td><td><code>(let [ret (f opts)] (if (green-true? ret) ret (a opts)))</code> — use advice as a fallback when the inward result failed.</td></tr>
-<tr><td><code>:filter-args</code></td><td><code>(f (a opts))</code> — transform the input map.</td></tr>
-<tr><td><code>:filter-return</code></td><td><code>(a (f opts))</code> — transform the result map.</td></tr>
+<tr><th>How</th><th>Effect (base <code>f</code>, advice <code>a</code>, input <code>opts</code>)</th><th>Use cases</th></tr>
+<tr><td><code>:around</code></td><td><code>(a f opts)</code> — full control; <code>a</code> decides if/how to call <code>f</code>.</td><td>Dry-run skips, retries, timing/tracing, locks, or any wrapper that may call <code>f</code> zero, one, or many times.</td></tr>
+<tr><td><code>:override</code></td><td><code>(a opts)</code> — replaces <code>f</code> entirely.</td><td>Stub a step in tests, replace a default implementation, or swap behavior for one environment.</td></tr>
+<tr><td><code>:before</code></td><td><code>(a opts)</code> for side effects (return ignored), then <code>(f opts)</code>.</td><td>Setup and prerequisites: write <code>backend.tf</code>, create directories, acquire a lock, validate inputs before side effects.</td></tr>
+<tr><td><code>:after</code></td><td><code>(f opts)</code>, then <code>(a opts)</code> for side effects (return ignored); <code>f</code>'s return flows out.</td><td>Audit, metrics, notifications, or cleanup that should observe the call but not change its result.</td></tr>
+<tr><td><code>:before-while</code></td><td><code>(and (a opts) (f opts))</code> — run inward only while advice returns truthy.</td><td>Precondition gates: continue only while checks pass, such as maintenance-window, quota, or policy guards.</td></tr>
+<tr><td><code>:before-until</code></td><td><code>(or (a opts) (f opts))</code> — short-circuit with the advice result when it is truthy.</td><td>Fast paths and no-ops: return a cached/already-converged/skip result before the expensive or destructive step runs.</td></tr>
+<tr><td><code>:after-while</code></td><td><code>(let [ret (f opts)] (if (green-true? ret) (a opts) ret))</code> — run advice only when the inward result is successful.</td><td>Success-only follow-ups: run a verification, registration, or notification step only after <code>f</code> succeeded.</td></tr>
+<tr><td><code>:after-until</code></td><td><code>(let [ret (f opts)] (if (green-true? ret) ret (a opts)))</code> — use advice as a fallback when the inward result failed.</td><td>Recovery and fallback: handle a failed result by rolling back, repairing state, or supplying a fallback result.</td></tr>
+<tr><td><code>:filter-args</code></td><td><code>(f (a opts))</code> — transform the input map.</td><td>Normalize or scope inputs: inject defaults, select a sub-map, add derived paths, or redact secrets before the step.</td></tr>
+<tr><td><code>:filter-return</code></td><td><code>(a (f opts))</code> — transform the result map.</td><td>Normalize or enrich outputs: attach derived data, strip temp/private keys, redact values, or adapt a step's result shape.</td></tr>
 </table>
 <p>For <code>:after-while</code> and <code>:after-until</code>, <code>green-true?</code> adapts Green's step contract to boolean advice semantics: a map with missing or zero <code>:green/exit</code> is true, while a positive <code>:green/exit</code> is false. Non-map values passed to <code>green.advice/compose</code> directly keep ordinary Clojure truthiness.</p>
 <p>Stacking is Emacs-like: at equal <code>:depth</code>, the most recently added advice is outermost, and per-step/all-steps entries interleave in that single add order. A <code>:depth</code> property (-100..100, default 0) overrides add order: lower depths run farther outside, higher depths farther inside. Every advice carries an explicit <code>:id</code>; re-adding the same id replaces the old entry and removal is by id. The advice stack runs inside the runner's try/catch: a throwing advice fails the step through the normal <code>:green/*</code> contract.</p>

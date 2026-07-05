@@ -76,9 +76,15 @@ Six main namespaces under `src/green/`:
   targets one step; `wf/advice-add-all` targets every step. Advice stacks
   in strict add order across both registries (most recently added is
   outermost) unless a `:depth` prop (-100..100) overrides placement,
-  exactly like Emacs hook depths. Registries are plain immutable values —
-  advice is workflow-scoped, not process-global, and all operations (`add`,
-  `remove-id`, `merge-entries`, ...) are pure.
+  exactly like Emacs hook depths. Use cases by `how`: `:around` = dry-run,
+  retry, timing, locks; `:override` = replace/stub; `:before` = setup or
+  prerequisites; `:after` = audit/metrics/cleanup; `:before-while` =
+  precondition gates; `:before-until` = fast-path/no-op; `:after-while` =
+  success-only follow-up; `:after-until` = recovery/fallback; `:filter-args`
+  = normalize/scope input; `:filter-return` = normalize/enrich output.
+  Registries are plain immutable values — advice is workflow-scoped, not
+  process-global, and all operations (`add`, `remove-id`, `merge-entries`,
+  ...) are pure.
   **Advice inheritance across `wf/step` embeds** is the trickiest part of
   the engine: a run stamps its effective registries into opts under a
   private key, the nested run merges them over its own via

@@ -29,6 +29,26 @@
     :filter-args   (OLDFUN (FUNCTION r))
     :filter-return (FUNCTION (OLDFUN r))
 
+  Typical use cases for each `how`:
+    :around        dry-run, retry, timing/tracing, locks; call OLDFUN
+                   zero, one, or many times
+    :override      stubs, tests, or environment-specific replacements
+    :before        setup/prerequisites such as backend files, dirs, locks,
+                   or validation
+    :after         audit, metrics, notifications, or cleanup without
+                   changing OLDFUN's result
+    :before-while  precondition gates: continue only while guards pass
+    :before-until  fast paths/no-ops: cached or already-converged result
+                   skips OLDFUN
+    :after-while   success-only follow-ups such as verification,
+                   registration, or notifications
+    :after-until   failure recovery/fallback: rollback, repair, or supply
+                   an alternate result
+    :filter-args   normalize/scope inputs: defaults, derived paths,
+                   sub-maps, redaction
+    :filter-return normalize/enrich outputs: derived data, temp-key
+                   cleanup, redaction, result-shape adaptation
+
   For after-while/after-until, a Green step result is true only when its
   :green/exit is 0 (missing means 0); a positive :green/exit is false.
   Non-map returns keep ordinary Clojure truthiness for compose-level use."

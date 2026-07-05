@@ -35,7 +35,13 @@ configuration files, OpenTofu as the muscle.
 - **Advice** (Emacs `nadvice`-style, workflow-scoped): wrap, override, or
   filter steps by name (or all steps) without touching the wiring. At equal
   `:depth`, the most recently added advice is outermost; lower `:depth` runs
-  farther outside.
+  farther outside. The advice `how` values cover specific use cases:
+  `:around` (dry-run/retry/timing/locks), `:override` (replace or stub),
+  `:before` (setup/prerequisites), `:after` (audit/metrics/cleanup),
+  `:before-while` (precondition gates), `:before-until` (fast-path/no-op),
+  `:after-while` (success-only follow-up), `:after-until` (recovery/fallback),
+  `:filter-args` (normalize/scope input), and `:filter-return`
+  (normalize/enrich output).
 - **Composition**: `(wf/step sub-workflow {:in … :out …})` turns a workflow
   into an ordinary step — wire it, advise it, fan it out. See
   `examples/multi-zookeeper` for two clusters built from one cluster workflow.
