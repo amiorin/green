@@ -130,14 +130,14 @@
 </ul>
 
 <h3>Composition — a workflow is a step</h3>
-<p><code>wf/run</code> has the exact shape of a step (<code>opts → opts</code>, outcome in <code>:green/exit</code>), so workflows compose into higher-level workflows with one function:</p>
+<p>A workflow run has the same <code>opts → opts</code> outcome contract as any step, and <code>wf/step</code> wraps a workflow as an ordinary step function:</p>
 <pre><code>(wf/step cluster-wf)                       ;; workflow → step fn: wire it, advise it, fan it out
 (wf/step cluster-wf
          {:in  (fn [opts] …)               ;; shape the opts entering the sub-workflow
           :out (fn [opts result] …)})      ;; merge the result back (default: result wins)</code></pre>
 <ul>
   <li>The sub-workflow's <code>:green/exit</code> (and <code>:green/err</code>/<code>:green/trace</code>) propagates like any step's — a failing sub-workflow halts or routes in the parent normally.</li>
-  <li>Ambient keys (<code>:green/event</code>, <code>:green/dry-run</code>) flow in with opts, so lifecycle and dry-run work through arbitrary nesting for free.</li>
+  <li>With the default identity <code>:in</code>, ambient keys (<code>:green/event</code>, <code>:green/dry-run</code>) flow in with opts, so lifecycle and dry-run work through arbitrary nesting. If a custom <code>:in</code> builds sub-opts from scratch, carry the ambient keys the sub-workflow needs; inherited advice is re-stamped automatically either way.</li>
   <li>Fan out a composed step to run the same workflow many times with different scopes — e.g. one ZooKeeper-cluster workflow, fanned out per cluster with <code>:in</code> rewriting <code>:zk/workdir</code>/<code>:zk/servers</code> (see <code>examples/multi-zookeeper</code>).</li>
 </ul>
 
@@ -187,7 +187,7 @@
 <p><strong>Advice inheritance through composed workflows.</strong> When a workflow is embedded with <code>wf/step</code>, the enclosing run's effective advice is inherited by the nested run. Step names match flat at any depth: parent advice for <code>:zk/node</code> reaches an embedded workflow's <code>:zk/node</code>. At equal depth, inherited advice stacks outside the child's own advice; a parent entry with the same <code>:id</code> replaces the child entry, and explicit <code>:depth</code> can intentionally change the placement. Use <code>wf/advice-plan</code> with a workflow or workflow chain (for example <code>[parent-wf cluster-wf]</code>) to inspect the composed stack with provenance.</p>
 <p>green dogfoods this twice:</p>
 <ul>
-  <li><strong>Backends</strong> — the OpenTofu backend is not hardwired: a <code>:before</code> advice writes the backend config into the working directory before the tofu step runs (local filesystem by default; S3/GCS are alternative advices, see §8). Swapping backends means swapping one advice.</li>
+  <li><strong>Backends</strong> — the OpenTofu backend is not hardwired: a <code>:before</code> advice writes the backend config into the working directory before the tofu step runs (the examples use the local-filesystem helper; S3/GCS helpers are alternatives, see §8). Swapping backends means swapping one advice.</li>
   <li><strong>Dry-run</strong> — <code>green.dry-run/advise</code> attaches an <code>:around</code> advice (id <code>:green.dry-run/skip</code>) to the side-effecting steps you name; when <code>:green/dry-run</code> is set (the CLI's <code>--dry-run</code> flag), those steps print <code>dry-run: would run :zk/node (create)</code> and are skipped with exit 0 — the rest of the graph still threads through.</li>
 </ul>
 
@@ -207,18 +207,18 @@
 <tr><td><code>:target</code></td><td>Output path; itself a Selmer template rendered against <code>:data</code>.</td></tr>
 <tr><td><code>:data</code></td><td>The map given to Selmer for both the template body and the target path.</td></tr>
 </table>
-<p><code>scaffold</code> is <strong>event-aware</strong>: on <code>:green/event :delete</code> it removes the targets (pruning directories it emptied) instead of rendering them — the same specs that create the files name what to remove. Rendering is idempotent: same specs, same bytes.</p>
-<p>Why flat specs (and not a nested tree): they're ordinary data built with ordinary seq functions; the Selmer-rendered targets are the manifest for <code>delete</code> and dry-runs; per-branch specs from a fan-out just <code>concat</code>.</p>
+<p><code>scaffold</code> is <strong>event-aware</strong>: on <code>:green/event :delete</code> it removes the targets (pruning each immediate parent directory if it became empty) instead of rendering them — the same specs that create the files name what to remove. Rendering is idempotent: same specs, same bytes.</p>
+<p>Why flat specs (and not a nested tree): they're ordinary data built with ordinary seq functions; the Selmer-rendered targets are the manifest for <code>delete</code>; per-branch specs from a fan-out just <code>concat</code>.</p>
 
 <h2 id="tofu">8. OpenTofu integration</h2>
 <pre><code>(require '[green.tofu :as tofu])
 
 (tofu/tofu-step opts {:dir "work/nodes/1"})        ;; :output-key optional</code></pre>
 <ul>
-  <li>Any non-<code>:delete</code> event (conventionally <code>:create</code>): <code>tofu init</code>, then <code>tofu apply -auto-approve</code>; afterwards <code>tofu output -json</code> is parsed and assoc'd into opts <strong>under a namespaced key</strong> — <code>:tofu/outputs</code> by default (never top-level; the desired state stays uncontaminated).</li>
+  <li>Any non-<code>:delete</code> event (conventionally <code>:create</code>): <code>tofu init</code>, then <code>tofu apply -auto-approve</code>; afterwards <code>tofu output -json</code> is parsed and assoc'd into opts under <code>:tofu/outputs</code> by default. If you override <code>:output-key</code>, keep it namespaced by convention so observed outputs do not contaminate top-level desired state.</li>
   <li><code>:delete</code>: <code>tofu init</code>, then <code>tofu destroy -auto-approve</code>.</li>
   <li>Non-zero tofu exits become <code>:green/exit</code> with stderr/stdout in <code>:green/err</code>.</li>
-  <li><strong>Backends are advices</strong> (see §6): <code>green.tofu/backend-advice</code> builds a <code>:before</code> advice writing <code>backend.tf</code> into the directory — backend type plus a flat attribute map (or a function of opts returning one). <code>local-backend-advice</code> (the default), <code>s3-backend-advice</code> (<code>{:bucket :key :region …}</code>), and <code>gcs-backend-advice</code> (<code>{:bucket :prefix}</code>) are the shipped variants.</li>
+  <li><strong>Backends are explicit advices</strong> (see §6): <code>green.tofu/backend-advice</code> builds a <code>:before</code> advice writing <code>backend.tf</code> into the directory — backend type plus a flat attribute map (or a function of opts returning one). <code>local-backend-advice</code> is the helper used by the examples, and <code>s3-backend-advice</code> (<code>{:bucket :key :region …}</code>)/<code>gcs-backend-advice</code> (<code>{:bucket :prefix}</code>) are shipped alternatives.</li>
 </ul>
 
 <h2 id="cli">9. The CLI</h2>
@@ -232,7 +232,7 @@
   <li>The first positional argument is the lifecycle event, keywordized into <code>:green/event</code>.</li>
   <li><code>--start</code>/<code>--end</code> override the workflow's start/end for slice runs.</li>
   <li><code>--dry-run</code> stamps <code>:green/dry-run true</code> into opts; steps advised with <code>green.dry-run</code> (see §6) print what they would do and are skipped.</li>
-  <li>Missing event or state file → exit code 2 with a usage/error message on stderr.</li>
+  <li>Missing event or state file → exit code 2 with a usage/error message in <code>:green/err</code>; <code>exec</code> prints it to stderr.</li>
   <li><code>green.cli/run-cli</code> returns the final opts (testable); <code>green.cli/exec</code> prints <code>:green/err</code>/<code>:green/trace</code> to stderr and calls <code>System/exit</code> with <code>:green/exit</code>.</li>
 </ul>
 <p>The user's project ships a <strong>self-contained babashka script</strong>:</p>
@@ -253,7 +253,7 @@
   <li><code>:zk/start</code> fans out via next-fn: one <code>:zk/node</code> branch per server, in parallel.</li>
   <li>Each branch scaffolds <code>main.tf</code> (locals: id/name/ip; outputs: the same) into its own directory and runs <code>tofu apply</code>; outputs merge back under <code>:tofu/outputs</code>. A <code>:before</code> advice writes the local-backend config first.</li>
   <li>The branches join at <code>:zk/zoo-cfg</code>, which reads every node's outputs from <code>:green/branches</code> and renders a <code>zoo.cfg</code> — listing <em>all</em> members — into <em>each</em> server's directory.</li>
-  <li><code>delete</code> destroys each node's tofu state and removes the generated files, symmetrically.</li>
+  <li><code>delete</code> runs <code>tofu destroy</code> for each node and removes the scaffolded files, symmetrically.</li>
 </ol>
 <p>The suite runs under babashka (<code>bb test</code>) and the JVM (<code>clojure -X:test</code>), keeping the bb-compatibility promise honest.</p>
 
@@ -301,7 +301,7 @@
 <tr><td><code>green.tofu/gcs-backend-advice</code></td><td><code>(opts → dir), config → before-advice</code></td></tr>
 <tr><td><code>green.dry-run/advice</code></td><td><code>step → around-advice</code></td></tr>
 <tr><td><code>green.dry-run/advise</code></td><td><code>workflow, steps → workflow</code></td></tr>
-<tr><td><code>green.cli/run-cli</code></td><td><code>workflow, args → final opts</code></td></tr>
+<tr><td><code>green.cli/run-cli</code></td><td><code>workflow [, args] → final opts</code></td></tr>
 <tr><td><code>green.cli/exec</code></td><td><code>workflow [, args] → exits process</code></td></tr>
 </table>
 

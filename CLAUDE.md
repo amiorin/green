@@ -21,10 +21,11 @@ clojure -T:build deploy    # deploy to Clojars (needs CLOJARS_USERNAME/CLOJARS_P
 ```
 
 Run a single test namespace under the JVM: `clojure -X:test :nses '[green.advice-test]'`.
-Under babashka, `bb.edn`'s `test` task always runs the full suite listed in
-`bb.edn` and `deps.edn`'s `:test` alias — add new test namespaces to both
-`bb.edn` (`:requires` and the `run-tests` call) and, if it must run
-standalone under the JVM, invoke `clojure.test/run-tests` directly.
+Under babashka, `bb.edn`'s `test` task explicitly requires and runs the
+namespaces named there — add new test namespaces to both `:requires` and the
+`run-tests` call. Under the JVM, `clojure -X:test` uses `deps.edn`'s `:test`
+paths with `cognitect.test-runner` discovery; there is no namespace list to
+maintain in `deps.edn`.
 
 Try the examples end-to-end:
 
@@ -67,7 +68,10 @@ Six main namespaces under `src/green/`:
   `:green/trace`; thrown exceptions inside a step are caught and converted
   automatically.
   `wf/step` turns a whole workflow into an ordinary step function so
-  workflows compose (`:in`/`:out` shape opts crossing the boundary) — see
+  workflows compose (`:in`/`:out` shape opts crossing the boundary). The
+  engine preserves inherited advice even when `:in` rebuilds opts from
+  scratch; a custom `:in` should carry ambient keys such as `:green/event`
+  and `:green/dry-run` if the sub-workflow needs them. See
   `examples/multi-zookeeper` for two clusters built from one workflow.
 - **`advice.clj`** — Emacs `nadvice`-style combinators (`:around`,
   `:before`, `:after`, `:override`, `:before-while`, `:before-until`,
@@ -99,11 +103,13 @@ Six main namespaces under `src/green/`:
 - **`scaffold.clj`** — a flat file-spec DSL: a seq of
   `{:template :ns/file :target "path" :data {...}}` maps rendered through
   Selmer from classpath resources. On `:green/event :delete` the same
-  specs name what to remove (with empty-parent-dir pruning).
+  specs name what to remove (with immediate empty parent-directory
+  pruning).
 - **`tofu.clj`** — event-aware OpenTofu steps: any non-`:delete` event
   (conventionally `:create`) → `init` + `apply` (assoc'ing
-  `tofu output -json` back into opts under a namespaced key, never
-  top-level), `:delete` → `init` + `destroy`. Backends are not
+  `tofu output -json` back into opts under `:tofu/outputs` by default;
+  callers can supply `:output-key` and should keep it namespaced),
+  `:delete` → `init` + `destroy`. Backends are not
   hardwired — they're attached as `:before` advice
   (`local-backend-advice`/`s3-backend-advice`/`gcs-backend-advice`) that
   writes `backend.tf` before the step runs.

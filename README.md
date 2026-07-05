@@ -43,19 +43,25 @@ configuration files, OpenTofu as the muscle.
   `:filter-args` (normalize/scope input), and `:filter-return`
   (normalize/enrich output).
 - **Composition**: `(wf/step sub-workflow {:in … :out …})` turns a workflow
-  into an ordinary step — wire it, advise it, fan it out. See
-  `examples/multi-zookeeper` for two clusters built from one cluster workflow.
+  into an ordinary step — wire it, advise it, fan it out. Inherited advice is
+  preserved even if `:in` rebuilds opts; custom `:in` functions should carry
+  ambient keys such as `:green/event` and `:green/dry-run` when the sub-workflow
+  needs them. See `examples/multi-zookeeper` for two clusters built from one
+  cluster workflow.
 - **Advice inheritance**: advice on a parent workflow reaches steps inside
   embedded sub-workflows — names match flat at any depth. At equal `:depth`,
   parent advice stacks outside child advice; re-adding a child's advice id
   from the parent replaces it (e.g. swap the child's default `::backend`).
   `wf/advice-plan` shows the composed stack for a step, with provenance.
 - `green.scaffold/scaffold` renders **flat file specs** through Selmer; on
-  `delete` the same specs name what to remove.
+  `delete` the same specs name what to remove, pruning immediate empty parent
+  directories.
 - `green.tofu/tofu-step` runs `tofu init` + `apply` for any non-`:delete`
   event or `init` + `destroy` for `:delete`, and merges `tofu output -json`
-  back into opts. Backends are advices:
-  `local-backend-advice` (default), `s3-backend-advice`, `gcs-backend-advice`.
+  under `:tofu/outputs` by default (use a namespaced `:output-key` if you
+  override it). Backends are explicit advices; the examples attach
+  `local-backend-advice`, and `s3-backend-advice`/`gcs-backend-advice` are
+  shipped alternatives.
 - `green.dry-run/advise` + the `--dry-run` flag: advised steps print what
   they would do and are skipped.
 
@@ -68,10 +74,12 @@ io.github.amiorin/green {:git/sha "…"}        ;; git dep
 io.github.amiorin/green {:mvn/version "0.1.0"} ;; Clojars, after deploy
 ```
 
-Publishing: `clojure -T:build jar | install | deploy` (deploy reads
+Publishing: `clojure -T:build jar` (or `install` / `deploy`; deploy reads
 `CLOJARS_USERNAME`/`CLOJARS_PASSWORD`).
 
 ## Try it
+
+Non-dry-run example runs require `tofu` on `PATH`; `--dry-run` only prints.
 
 ```sh
 cd examples/zookeeper
