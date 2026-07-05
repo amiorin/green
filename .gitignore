@@ -1,5 +1,6 @@
 .*
 !.gitignore
+!.github/
 !.clj-kondo
 .clj-kondo/.*
 !.lsp
