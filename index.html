@@ -386,10 +386,11 @@ cd ../once
 └── examples/once/      ONCE-style single-VPS PaaS; provider swap + Ansible scaffolds</code></pre>
 
 <h3>Distribution</h3>
-<p>Library coordinate: <code>io.github.amiorin/green</code>, version <code>0.1.0</code>.</p>
+<p>Library coordinate: <code>io.github.amiorin/green</code>. It has not been published to Clojars yet.</p>
 <ul>
-  <li><strong>Git dep</strong> (no registry needed): <code>io.github.amiorin/green {:git/sha "…"}</code> once the repo is pushed to GitHub — this is what the babashka script's <code>add-deps</code> uses in production (<code>{:local/root …}</code> during development).</li>
-  <li><strong>Clojars</strong>: <code>clojure -T:build jar</code> builds the jar + pom (MIT license, SCM data); <code>clojure -T:build install</code> puts it in the local <code>~/.m2</code>; <code>clojure -T:build deploy</code> pushes to Clojars using the <code>CLOJARS_USERNAME</code>/<code>CLOJARS_PASSWORD</code> environment variables.</li>
+  <li><strong>Current rule</strong>: external consumers and launcher snippets must use a git dep with an explicit commit SHA: <code>io.github.amiorin/green {:git/sha "REPLACE_WITH_COMMIT_SHA"}</code>. Do not use <code>:mvn/version</code> until a Clojars release exists.</li>
+  <li><strong>Development</strong>: in-repo examples use <code>{:local/root "../.."}</code> so they run directly from this checkout.</li>
+  <li><strong>Future Clojars publishing</strong>: <code>clojure -T:build jar</code> builds the jar + pom (MIT license, SCM data); <code>clojure -T:build install</code> puts it in the local <code>~/.m2</code>; <code>clojure -T:build deploy</code> pushes to Clojars using the <code>CLOJARS_USERNAME</code>/<code>CLOJARS_PASSWORD</code> environment variables.</li>
 </ul>
 
 <table>

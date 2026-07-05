@@ -114,15 +114,16 @@ cleanly on failure.
 
 ## Install
 
-As a git dep (once pushed to GitHub) or from Clojars:
+`green` has not been published to Clojars yet. Use a git dep with an explicit
+commit SHA:
 
 ```clojure
-io.github.amiorin/green {:git/sha "…"}        ;; git dep
-io.github.amiorin/green {:mvn/version "0.1.0"} ;; Clojars, after deploy
+io.github.amiorin/green {:git/sha "REPLACE_WITH_COMMIT_SHA"}
 ```
 
-Publishing: `clojure -T:build jar` (or `install` / `deploy`; deploy reads
-`CLOJARS_USERNAME`/`CLOJARS_PASSWORD`).
+In-repo examples use `:local/root "../.."` for development. Publishing for a
+future Clojars release: `clojure -T:build jar` (or `install` / `deploy`; deploy
+reads `CLOJARS_USERNAME`/`CLOJARS_PASSWORD`).
 
 ## Try it
 

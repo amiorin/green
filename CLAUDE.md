@@ -27,6 +27,11 @@ namespaces named there — add new test namespaces to both `:requires` and the
 paths with `cognitect.test-runner` discovery; there is no namespace list to
 maintain in `deps.edn`.
 
+Dependency rule: `green` has not been published to Clojars yet. External
+consumer docs and launcher snippets must use a git dependency with an explicit
+`:git/sha`; do not recommend `:mvn/version` until a Clojars release exists.
+In-repo examples may keep `:local/root "../.."` for development.
+
 Try the examples end-to-end:
 
 ```sh
