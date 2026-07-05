@@ -29,7 +29,10 @@
   boundary (it runs, then the workflow stops); :wire-fn is required;
   :next-fn is optional."
   [{:keys [start end wire-fn next-fn]}]
-  {:pre [(keyword? start) (fn? wire-fn)]}
+  (when-not (keyword? start)
+    (throw (ex-info "workflow :start must be a keyword" {:start start})))
+  (when-not (fn? wire-fn)
+    (throw (ex-info "workflow :wire-fn must be a function" {:wire-fn wire-fn})))
   {::start start ::end end ::wire-fn wire-fn ::next-fn next-fn
    ::advice {} ::advice-all [] ::advice-seq 0})
 
@@ -128,6 +131,12 @@
 ;; --- static graph (for join scheduling) ---------------------------------
 
 (defn- static-successors [wire-fn step]
+  ;; Deliberately lenient: this graph exists only for join detection, so a
+  ;; name the wire-fn can't resolve (nil or a throw) just contributes no
+  ;; static edges — next-fn may own routing for it. Real wiring bugs still
+  ;; surface when the step runs: run-step calls the same wire-fn and converts
+  ;; the failure to :green/exit. Throwing here would escape run uncaught,
+  ;; bypassing the Unix-style outcome contract.
   (try (rest (wire-fn step)) (catch Exception _ nil)))
 
 (defn- static-graph [wire-fn start]

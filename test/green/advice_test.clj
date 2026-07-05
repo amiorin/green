@@ -242,11 +242,11 @@
     (is (= [:b :g] (subvec (:log res) 3)))))
 
 (deftest invalid-how-and-out-of-range-depth-are-rejected-at-add-time
-  (is (thrown? AssertionError
-               (wf/advice-add (single-step-wf) :t/step :befor ::typo identity)))
-  (is (thrown? AssertionError
-               (wf/advice-add (single-step-wf) :t/step :before ::deep identity
-                              {:depth 101}))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"unsupported advice combinator"
+                        (wf/advice-add (single-step-wf) :t/step :befor ::typo identity)))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #":depth must be in -100..100"
+                        (wf/advice-add (single-step-wf) :t/step :before ::deep identity
+                                       {:depth 101}))))
 
 ;; --- cross-workflow inheritance (advice through wf/step) -------------------
 

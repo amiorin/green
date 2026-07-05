@@ -57,8 +57,12 @@
     :filter-args :filter-return})
 
 (defn- entry [how id f order props]
-  {:pre [(contains? hows how)
-         (<= -100 (:depth props 0) 100)]}
+  (when-not (contains? hows how)
+    (throw (ex-info (str "unsupported advice combinator: " how)
+                    {:how how :id id :supported hows})))
+  (when-not (<= -100 (:depth props 0) 100)
+    (throw (ex-info "advice :depth must be in -100..100"
+                    {:depth (:depth props) :id id})))
   {:id id :how how :fn f :seq order :depth (:depth props 0)})
 
 (defn- remove-entry-ids [entries ids]
