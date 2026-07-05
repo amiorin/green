@@ -126,3 +126,5 @@ Six main namespaces under `src/green/`:
   `advice-add`, `advice-add-all`, `step`, etc.) is pure — it returns a new
   workflow value or step function rather than mutating one, so workflows are
   safe to branch and share.
+- Ignore `dist/`: it is generated output, not source. Do not read, edit, or
+  use files under `dist/` as documentation; update the source files instead.
