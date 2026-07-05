@@ -165,6 +165,82 @@
 <p><strong>Failure in a branch:</strong> running siblings finish, the join step is <em>skipped</em>, and the worst exit code (with its <code>:green/err</code>/<code>:green/trace</code>) propagates as the workflow result.</p>
 <div class="note"><strong>Limitation (v1).</strong> Convergence is detected by step name: branches arriving at the same qualified name join there. The scheduler holds a branch back from a join while any other live branch can still statically reach it (via wire-fn edges), so branches of different lengths join correctly. Dynamic next-fn detours invisible to the static graph may not be awaited.</div>
 
+<h3>Scheduler algorithm in plain English</h3>
+<p>The scheduler is basically a small fork/join workflow runner.<br>
+In simple words:</p>
+<ol>
+  <li>Start with one live task
+    <ul>
+      <li>A &ldquo;live&rdquo; task means: &ldquo;run step X with this opts map.&rdquo;</li>
+      <li>Initially there is only the workflow&rsquo;s <code>:start</code> step.</li>
+    </ul>
+  </li>
+  <li>Keep looping while there is work
+    <ul>
+      <li>The scheduler keeps two piles:
+        <ul>
+          <li><code>live</code>: branches still running</li>
+          <li><code>finished</code>: branches that reached the end</li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+  <li>Group live branches by step
+    <ul>
+      <li>If multiple branches are waiting at the same step, that may mean they need to join.</li>
+    </ul>
+  </li>
+  <li>Decide which steps are ready
+    <ul>
+      <li>Before running a step, the scheduler asks:
+        <ul>
+          <li>&ldquo;Could another currently-running branch still reach this same step later?&rdquo;</li>
+        </ul>
+      </li>
+      <li>If yes, it waits, so the branches can join together.</li>
+      <li>This uses the static workflow graph from <code>wire-fn</code>.</li>
+    </ul>
+  </li>
+  <li>Run ready work in parallel
+    <ul>
+      <li>Ready steps are executed using <code>future</code>, so independent branches run concurrently.</li>
+    </ul>
+  </li>
+  <li>After a step runs, choose what happens next
+    <ul>
+      <li>No next step: branch is finished.</li>
+      <li>One next step: continue normally.</li>
+      <li>Multiple next steps: this is a fork; create one branch per successor.</li>
+    </ul>
+  </li>
+  <li>Handle joins
+    <ul>
+      <li>If branches from different origins arrive at the same step, the scheduler runs that step once.</li>
+      <li>It gives the join step:
+        <ul>
+          <li>the opts from the fork point</li>
+          <li>all branch results under <code>:green/branches</code></li>
+        </ul>
+      </li>
+    </ul>
+  </li>
+  <li>Handle failures inside forks
+    <ul>
+      <li>If one branch fails, siblings already running finish their current step.</li>
+      <li>Then the whole fork collapses.</li>
+      <li>The join is skipped.</li>
+      <li>The final result carries the worst exit code and all branch results.</li>
+    </ul>
+  </li>
+  <li>Finish
+    <ul>
+      <li>When there are no live branches left, the scheduler returns the final opts.</li>
+      <li>If multiple terminal branches exist, it returns the first failed one, otherwise the last successful one.</li>
+    </ul>
+  </li>
+</ol>
+<p>Short version: it repeatedly runs all safe-to-run steps in parallel, waits when branches may need to join, joins converged branches once, and collapses forks cleanly on failure.</p>
+
 <h2 id="advice">6. Advice</h2>
 <p>green ports Emacs' <code>advice-add</code>/<code>advice-remove</code> to step functions and adds <code>wf/advice-add-all</code>/<code>wf/advice-remove-all</code> for all-steps advice. Advice is <strong>workflow-scoped and pure</strong>: adding or removing returns a new workflow value — no process-global registry, no teardown in tests.</p>
 <pre><code>(-> workflow

@@ -81,6 +81,52 @@ Six main namespaces under `src/green/`:
   scratch; a custom `:in` should carry ambient keys such as `:green/event`
   and `:green/dry-run` if the sub-workflow needs them. See
   `examples/multi-zookeeper` for two clusters built from one workflow.
+
+  The scheduler is basically a small fork/join workflow runner.
+  In simple words:
+
+  1. Start with one live task
+     - A "live" task means: "run step X with this opts map."
+     - Initially there is only the workflow's `:start` step.
+  2. Keep looping while there is work
+     - The scheduler keeps two piles:
+       - `live`: branches still running
+       - `finished`: branches that reached the end
+  3. Group live branches by step
+     - If multiple branches are waiting at the same step, that may mean they
+       need to join.
+  4. Decide which steps are ready
+     - Before running a step, the scheduler asks:
+       - "Could another currently-running branch still reach this same step later?"
+     - If yes, it waits, so the branches can join together.
+     - This uses the static workflow graph from `wire-fn`.
+  5. Run ready work in parallel
+     - Ready steps are executed using `future`, so independent branches run
+       concurrently.
+  6. After a step runs, choose what happens next
+     - No next step: branch is finished.
+     - One next step: continue normally.
+     - Multiple next steps: this is a fork; create one branch per successor.
+  7. Handle joins
+     - If branches from different origins arrive at the same step, the scheduler
+       runs that step once.
+     - It gives the join step:
+       - the opts from the fork point
+       - all branch results under `:green/branches`
+  8. Handle failures inside forks
+     - If one branch fails, siblings already running finish their current step.
+     - Then the whole fork collapses.
+     - The join is skipped.
+     - The final result carries the worst exit code and all branch results.
+  9. Finish
+     - When there are no live branches left, the scheduler returns the final
+       opts.
+     - If multiple terminal branches exist, it returns the first failed one,
+       otherwise the last successful one.
+
+  Short version: it repeatedly runs all safe-to-run steps in parallel, waits
+  when branches may need to join, joins converged branches once, and collapses
+  forks cleanly on failure.
 - **`advice.clj`** — Emacs `nadvice`-style combinators (`:around`,
   `:before`, `:after`, `:override`, `:before-while`, `:before-until`,
   `:after-while`, `:after-until`, `:filter-args`, `:filter-return`) for
