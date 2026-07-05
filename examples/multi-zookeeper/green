@@ -17,6 +17,11 @@
 
 (defn start-step [opts] opts)
 
+(defn logln [& xs]
+  (locking *out*
+    (apply println xs)
+    (flush)))
+
 (defn node-step [opts]
   (let [node (:zk/node opts)
         dir (node-dir opts node)
@@ -76,7 +81,7 @@
                        :clusters/report]
     :clusters/report [(fn [opts]
                         (doseq [b (:green/branches opts)]
-                          (println "cluster ready:" (:zk/workdir b)))
+                          (logln "cluster ready:" (:zk/workdir b)))
                         opts)]))
 
 (defn clusters-next-fn [step default-next opts]
@@ -95,8 +100,8 @@
       ;; flat step names reach any depth, parent advice is outermost
       (wf/advice-add :zk/node :before ::audit
                      (fn [opts]
-                       (println "node" (get-in opts [:zk/node :name])
-                                "of cluster" (get-in opts [:zk/cluster :name]))))
+                       (logln "node" (get-in opts [:zk/node :name])
+                              "of cluster" (get-in opts [:zk/cluster :name]))))
       ;; dry-run for the whole composition, declared once at the top;
       ;; inspect the resulting stack with e.g.
       ;;   (wf/advice-plan [workflow cluster-wf] :zk/node)

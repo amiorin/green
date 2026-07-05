@@ -5,14 +5,19 @@
   --dry-run flag stamps it) the step is skipped with a note instead of run."
   (:require [green.workflow :as wf]))
 
+(defn- logln [& xs]
+  (locking *out*
+    (apply println xs)
+    (flush)))
+
 (defn advice
   "Build an :around advice for `step`: when :green/dry-run is set, print
   what would have run and skip the base function; otherwise call through."
   [step]
   (fn [f opts]
     (if (:green/dry-run opts)
-      (do (println (str "dry-run: would run " step
-                        " (" (name (:green/event opts :create)) ")"))
+      (do (logln (str "dry-run: would run " step
+                       " (" (name (:green/event opts :create)) ")"))
           (assoc opts :green/exit 0))
       (f opts))))
 
