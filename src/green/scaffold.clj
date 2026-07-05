@@ -32,21 +32,39 @@
     (when (and p (.isDirectory p) (empty? (.list p)))
       (.delete p))))
 
+(defn- target-path [{:keys [target data]}]
+  (selmer/render target data))
+
+(defn- target-paths [specs]
+  (mapv target-path specs))
+
+(defn- delete-target! [target]
+  (let [f (io/file target)]
+    (when (.exists f) (io/delete-file f))
+    (prune-empty-dir! f)))
+
+(defn- create-target! [{:keys [template data]} target]
+  (let [f (io/file target)]
+    (io/make-parents f)
+    (spit f (render-template template data))))
+
+(defn- delete-targets! [targets]
+  (doseq [target targets]
+    (delete-target! target)))
+
+(defn- create-targets! [specs targets]
+  (doseq [[spec target] (map vector specs targets)]
+    (create-target! spec target)))
+
 (defn scaffold
   "Materialize `specs` (create) or remove their targets (delete), driven by
   :green/event in `opts`. Returns opts with :green/exit 0 and the affected
   paths under :green.scaffold/written or :green.scaffold/deleted."
   [opts specs]
   (let [specs (vec specs)
-        targets (mapv (fn [{:keys [target data]}] (selmer/render target data)) specs)]
+        targets (target-paths specs)]
     (if (= :delete (:green/event opts))
-      (do (doseq [t targets]
-            (let [f (io/file t)]
-              (when (.exists f) (io/delete-file f))
-              (prune-empty-dir! f)))
+      (do (delete-targets! targets)
           (assoc opts :green/exit 0 :green.scaffold/deleted targets))
-      (do (doseq [[{:keys [template data]} t] (map vector specs targets)]
-            (let [f (io/file t)]
-              (io/make-parents f)
-              (spit f (render-template template data))))
+      (do (create-targets! specs targets)
           (assoc opts :green/exit 0 :green.scaffold/written targets)))))

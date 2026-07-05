@@ -159,27 +159,49 @@
     (.printStackTrace t (PrintWriter. sw true))
     (str sw)))
 
+(defn- failed? [opts]
+  (pos? (:green/exit opts 0)))
+
+(defn- step-failure [opts ^Throwable t]
+  (assoc opts
+         :green/exit (or (:green/exit (ex-data t)) 1)
+         :green/err (or (ex-message t) (str (class t)))
+         :green/trace (stack-trace t)))
+
+(defn- scheduler-failure [opts ^Throwable t]
+  (assoc opts
+         :green/exit 1
+         :green/err (or (ex-message t) (str (class t)))
+         :green/trace (stack-trace t)))
+
+(defn- with-default-exit [opts]
+  (cond-> opts
+    (nil? (:green/exit opts)) (assoc :green/exit 0)))
+
+(defn- inherited-payload [wf]
+  {:advice (::advice wf)
+   :advice-all (::advice-all wf)})
+
+(defn- stamp-inherited [wf opts]
+  (assoc opts ::inherited (inherited-payload wf)))
+
+(defn- step-advice [wf step]
+  (concat (::advice-all wf) (get-in wf [::advice step])))
+
 (defn- run-step [wf step opts]
   (try
     (let [decl ((::wire-fn wf) step)
           f (first decl)]
       (when-not (fn? f)
         (throw (ex-info (str "no function wired for step " step) {:step step})))
-      (let [entries (concat (::advice-all wf) (get-in wf [::advice step]))
-            ;; stamp the effective registries so an embedded run inherits them
-            stamped (assoc opts ::inherited {:advice (::advice wf)
-                                             :advice-all (::advice-all wf)})
-            ret ((advice/compose f entries) stamped)]
+      (let [ret ((advice/compose f (step-advice wf step))
+                 (stamp-inherited wf opts))]
         (when-not (map? ret)
           (throw (ex-info (str "step " step " returned a non-map: " (pr-str ret))
                           {:step step})))
-        (cond-> (dissoc ret ::inherited)
-          (nil? (:green/exit ret)) (assoc :green/exit 0))))
+        (with-default-exit (dissoc ret ::inherited))))
     (catch Throwable t
-      (assoc opts
-             :green/exit (or (:green/exit (ex-data t)) 1)
-             :green/err (or (ex-message t) (str (class t)))
-             :green/trace (stack-trace t)))))
+      (step-failure opts t))))
 
 (defn- next-pairs
   "Successor [step opts] pairs for `step` after it produced `opts`.
@@ -190,7 +212,7 @@
     (let [dn (seq (rest ((::wire-fn wf) step)))]
       (if-let [nf (::next-fn wf)]
         (vec (nf step dn opts))
-        (if (pos? (:green/exit opts 0))
+        (if (failed? opts)
           []
           (mapv (fn [s] [s opts]) dn))))))
 
@@ -218,38 +240,90 @@
                             {:step s :opts o :parent uid :forks (conj forks frame)})
                           pairs)})))
 
+(defn- terminal-result [opts forks]
+  {:terminals [{:opts opts :forks forks}]})
+
+(defn- branch-worst-exit [branch-opts]
+  (apply max (map #(:green/exit % 0) branch-opts)))
+
+(defn- first-failed-branch [branch-opts]
+  (first (filter failed? branch-opts)))
+
+(defn- join-forks [entries]
+  (or (some #(when (seq (:forks %)) (:forks %)) entries) []))
+
+(defn- failed-join-result [fork-opts forks branch-opts worst]
+  (let [bad (first-failed-branch branch-opts)]
+    (terminal-result (assoc fork-opts
+                            :green/exit worst
+                            :green/err (:green/err bad)
+                            :green/trace (:green/trace bad)
+                            :green/branches branch-opts)
+                     forks)))
+
+(defn- run-single-unit [wf uid step {:keys [opts forks]}]
+  (let [opts' (run-step wf step opts)]
+    (children uid opts' (next-pairs wf step opts') forks)))
+
+(defn- run-join-unit [wf uid step entries]
+  (let [branch-opts (mapv :opts entries)
+        forks (join-forks entries)
+        fork-opts (if (seq forks) (:opts (peek forks)) (first branch-opts))
+        forks' (if (seq forks) (pop forks) forks)
+        worst (branch-worst-exit branch-opts)]
+    (if (pos? worst)
+      (failed-join-result fork-opts forks' branch-opts worst)
+      (let [opts' (run-step wf step (assoc fork-opts :green/branches branch-opts))]
+        (children uid opts' (next-pairs wf step opts') forks')))))
+
+(defn- unit-base-opts [entry entries]
+  (or (:opts entry) (:opts (first entries)) {}))
+
+(defn- unit-forks [entry entries]
+  (or (:forks entry) (:forks (first entries)) []))
+
+(defn- failed-unit-result [entry entries ^Throwable t]
+  (terminal-result (scheduler-failure (unit-base-opts entry entries) t)
+                   (unit-forks entry entries)))
+
 (defn- run-unit [wf {:keys [kind step entry entries]}]
   (let [uid (gensym "green-unit")]
     (try
       (case kind
-        :single
-        (let [{:keys [opts forks]} entry
-              opts' (run-step wf step opts)]
-          (children uid opts' (next-pairs wf step opts') forks))
-
-        :join
-        (let [branch-opts (mapv :opts entries)
-              forks (or (some #(when (seq (:forks %)) (:forks %)) entries) [])
-              fork-opts (if (seq forks) (:opts (peek forks)) (first branch-opts))
-              forks' (if (seq forks) (pop forks) forks)
-              worst (apply max (map #(:green/exit % 0) branch-opts))]
-          (if (pos? worst)
-            (let [bad (first (filter #(pos? (:green/exit % 0)) branch-opts))]
-              {:terminals [{:opts (assoc fork-opts
-                                         :green/exit worst
-                                         :green/err (:green/err bad)
-                                         :green/trace (:green/trace bad)
-                                         :green/branches branch-opts)
-                            :forks forks'}]})
-            (let [opts' (run-step wf step (assoc fork-opts :green/branches branch-opts))]
-              (children uid opts' (next-pairs wf step opts') forks')))))
+        :single (run-single-unit wf uid step entry)
+        :join (run-join-unit wf uid step entries))
       (catch Throwable t
-        (let [base (or (:opts entry) (:opts (first entries)) {})]
-          {:terminals [{:opts (assoc base
-                                     :green/exit 1
-                                     :green/err (or (ex-message t) (str (class t)))
-                                     :green/trace (stack-trace t))
-                        :forks (or (:forks entry) (:forks (first entries)) [])}]})))))
+        (failed-unit-result entry entries t)))))
+
+(defn- failed-fork-branch? [branch]
+  (and (failed? (:opts branch)) (seq (:forks branch))))
+
+(defn- in-fork? [fork-id entry]
+  (boolean (some #(= fork-id (:id %)) (:forks entry))))
+
+(defn- fork-members [fork-id live finished]
+  (into (filterv (partial in-fork? fork-id) finished)
+        (filterv (partial in-fork? fork-id) live)))
+
+(defn- outside-fork [fork-id entries]
+  (filterv (complement (partial in-fork? fork-id)) entries))
+
+(defn- collapsed-fork-entry [fork-opts bad branch-opts worst]
+  (let [worst-opts (first (filter #(= worst (:green/exit % 0)) branch-opts))]
+    {:opts (assoc fork-opts
+                  :green/exit worst
+                  :green/err (:green/err worst-opts)
+                  :green/trace (:green/trace worst-opts)
+                  :green/branches branch-opts)
+     :forks (pop (:forks bad))}))
+
+(defn- collapse-fork [live finished bad]
+  (let [{fork-id :id fork-opts :opts} (peek (:forks bad))
+        branch-opts (mapv :opts (fork-members fork-id live finished))
+        worst (branch-worst-exit branch-opts)]
+    [(outside-fork fork-id live)
+     (conj (outside-fork fork-id finished)
+           (collapsed-fork-entry fork-opts bad branch-opts worst))]))
 
 (defn- collapse-doomed
   "While a finished branch failed inside a fork, collapse that fork: absorb
@@ -259,23 +333,9 @@
   Cascades outward through nested forks."
   [live finished]
   (loop [live live finished finished]
-    (if-let [bad (first (filter #(and (pos? (:green/exit (:opts %) 0))
-                                      (seq (:forks %)))
-                                finished))]
-      (let [{fork-id :id fork-opts :opts} (peek (:forks bad))
-            member? (fn [x] (boolean (some #(= fork-id (:id %)) (:forks x))))
-            group (into (filterv member? finished) (filterv member? live))
-            branch-opts (mapv :opts group)
-            worst (apply max (map #(:green/exit % 0) branch-opts))
-            worst-opts (first (filter #(= worst (:green/exit % 0)) branch-opts))]
-        (recur (filterv (complement member?) live)
-               (conj (filterv (complement member?) finished)
-                     {:opts (assoc fork-opts
-                                   :green/exit worst
-                                   :green/err (:green/err worst-opts)
-                                   :green/trace (:green/trace worst-opts)
-                                   :green/branches branch-opts)
-                      :forks (pop (:forks bad))})))
+    (if-let [bad (first (filter failed-fork-branch? finished))]
+      (let [[live' finished'] (collapse-fork live finished bad)]
+        (recur live' finished'))
       [live finished])))
 
 (defn- finalize [finished]
@@ -283,8 +343,52 @@
     (cond
       (empty? terminals) {:green/exit 0}
       (= 1 (count terminals)) (first terminals)
-      :else (or (first (filter #(pos? (:green/exit % 0)) terminals))
+      :else (or (first (filter failed? terminals))
                 (last terminals)))))
+
+(defn- blocked-step? [g live step]
+  (some #(and (not= (:step %) step) (reaches? g (:step %) step))
+        live))
+
+(defn- ready-steps [g live by-step]
+  (or (seq (remove #(blocked-step? g live %) (keys by-step)))
+      (keys by-step)))
+
+(defn- waiting-steps [by-step ready]
+  (remove (set ready) (keys by-step)))
+
+(defn- entries-for-steps [by-step steps]
+  (mapcat #(get by-step %) steps))
+
+(defn- same-origin? [entries]
+  (or (= 1 (count entries))
+      (apply = (map :parent entries))))
+
+(defn- single-units [step entries]
+  (map (fn [entry] {:kind :single :step step :entry entry}) entries))
+
+(defn- step-units [step entries]
+  (if (same-origin? entries)
+    (single-units step entries)
+    [{:kind :join :step step :entries entries}]))
+
+(defn- ready-units [by-step ready]
+  (mapcat (fn [step] (step-units step (get by-step step))) ready))
+
+(defn- run-units [wf units]
+  (mapv deref (mapv (fn [unit] (future (run-unit wf unit))) units)))
+
+(defn- scheduler-step [wf g live finished]
+  (let [by-step (group-by :step live)
+        ready (ready-steps g live by-step)
+        waiting (waiting-steps by-step ready)
+        units (ready-units by-step ready)
+        results (run-units wf units)]
+    (collapse-doomed
+     (-> []
+         (into (entries-for-steps by-step waiting))
+         (into (mapcat :new-entries results)))
+     (into finished (mapcat :terminals results)))))
 
 (declare run)
 
@@ -326,27 +430,5 @@
            finished []]
       (if (empty? live)
         (finalize finished)
-        (let [by-step (group-by :step live)
-              ;; hold a step back while another live branch can still reach it
-              blocked? (fn [s]
-                         (some #(and (not= (:step %) s) (reaches? g (:step %) s))
-                               live))
-              ready (or (seq (remove blocked? (keys by-step)))
-                        (keys by-step))
-              waiting (remove (set ready) (keys by-step))
-              units (mapcat (fn [s]
-                              (let [es (by-step s)]
-                                (if (or (= 1 (count es))
-                                        (apply = (map :parent es)))
-                                  ;; single entry, or same-origin fan-out:
-                                  ;; run each individually
-                                  (map (fn [e] {:kind :single :step s :entry e}) es)
-                                  [{:kind :join :step s :entries es}])))
-                            ready)
-              results (mapv deref (mapv (fn [u] (future (run-unit wf u))) units))
-              [live' finished'] (collapse-doomed
-                                 (-> []
-                                     (into (mapcat by-step waiting))
-                                     (into (mapcat :new-entries results)))
-                                 (into finished (mapcat :terminals results)))]
+        (let [[live' finished'] (scheduler-step wf g live finished)]
           (recur live' finished'))))))

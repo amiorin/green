@@ -56,38 +56,44 @@
     :before-while :before-until :after-while :after-until
     :filter-args :filter-return})
 
-(defn- entry [how id f seq props]
+(defn- entry [how id f order props]
   {:pre [(contains? hows how)
          (<= -100 (:depth props 0) 100)]}
-  {:id id :how how :fn f :seq seq :depth (:depth props 0)})
+  {:id id :how how :fn f :seq order :depth (:depth props 0)})
+
+(defn- remove-entry-ids [entries ids]
+  (filterv #(not (contains? ids (:id %))) (or entries [])))
+
+(defn- remove-entry-id [entries id]
+  (remove-entry-ids entries #{id}))
 
 (defn add
   "Register advice `f` on `step` with combinator `how` under `id`, tagged
   with add-order `seq`. `props` may carry :depth. Re-adding an existing id
   replaces it and moves it to the top of the stack for its depth (given a
   fresh, larger `seq`)."
-  [registry step how id f seq props]
+  [registry step how id f order props]
   (update registry step
           (fnil (fn [entries]
-                  (conj (filterv #(not= id (:id %)) entries)
-                        (entry how id f seq props)))
+                  (conj (remove-entry-id entries id)
+                        (entry how id f order props)))
                 [])))
 
 (defn remove-id
   "Remove the advice registered under `id` on `step`."
   [registry step id]
-  (update registry step (fn [entries] (filterv #(not= id (:id %)) (or entries [])))))
+  (update registry step remove-entry-id id))
 
 (defn add-global
   "Like `add`, but for a flat (not step-keyed) vector of entries — used for
   advice that applies to every step."
-  [entries how id f seq props]
-  (conj (filterv #(not= id (:id %)) entries) (entry how id f seq props)))
+  [entries how id f order props]
+  (conj (remove-entry-id entries id) (entry how id f order props)))
 
 (defn remove-global-id
   "Remove the global advice registered under `id`."
   [entries id]
-  (filterv #(not= id (:id %)) entries))
+  (remove-entry-id entries id))
 
 (defn merge-entries
   "Stack `outer` entries (inherited from an enclosing workflow) outside
@@ -96,8 +102,8 @@
   :id. :depth still overrides placement at compose time."
   [inner outer offset]
   (let [outer (mapv #(update % :seq + offset) outer)
-        replaced? (set (map :id outer))]
-    (into (filterv #(not (replaced? (:id %))) (or inner [])) outer)))
+        replaced-ids (set (map :id outer))]
+    (into (remove-entry-ids inner replaced-ids) outer)))
 
 (defn merge-registry
   "Merge an outer step-keyed registry over an inner one, step by step,
@@ -116,22 +122,22 @@
     (zero? (or (:green/exit ret) 0))
     (boolean ret)))
 
-(defn- wrap [how a base]
+(defn- wrap [how advice-fn base]
   (case how
-    :around        (fn [opts] (a base opts))
-    :override      (fn [opts] (a opts))
-    :before        (fn [opts] (a opts) (base opts))
-    :after         (fn [opts] (let [ret (base opts)] (a opts) ret))
-    :before-while  (fn [opts] (and (a opts) (base opts)))
-    :before-until  (fn [opts] (or (a opts) (base opts)))
+    :around        (fn [opts] (advice-fn base opts))
+    :override      (fn [opts] (advice-fn opts))
+    :before        (fn [opts] (advice-fn opts) (base opts))
+    :after         (fn [opts] (let [ret (base opts)] (advice-fn opts) ret))
+    :before-while  (fn [opts] (and (advice-fn opts) (base opts)))
+    :before-until  (fn [opts] (or (advice-fn opts) (base opts)))
     :after-while   (fn [opts]
                      (let [ret (base opts)]
-                       (if (green-true? ret) (a opts) ret)))
+                       (if (green-true? ret) (advice-fn opts) ret)))
     :after-until   (fn [opts]
                      (let [ret (base opts)]
-                       (if (green-true? ret) ret (a opts))))
-    :filter-args   (fn [opts] (base (a opts)))
-    :filter-return (fn [opts] (a (base opts)))))
+                       (if (green-true? ret) ret (advice-fn opts))))
+    :filter-args   (fn [opts] (base (advice-fn opts)))
+    :filter-return (fn [opts] (advice-fn (base opts)))))
 
 (defn ordered
   "Entries sorted innermost-first — the order `compose` wraps them:
@@ -146,4 +152,7 @@
   outermost. The reduce builds inside-out over `ordered` (innermost-first)
   entries."
   [base entries]
-  (reduce (fn [g {:keys [how fn]}] (wrap how fn g)) base (ordered entries)))
+  (reduce (fn [g {:keys [how] advice-fn :fn}]
+            (wrap how advice-fn g))
+          base
+          (ordered entries)))
