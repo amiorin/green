@@ -317,11 +317,17 @@ In simple words:</p>
 </ul>
 <p>The user's project ships a <strong>self-contained babashka script</strong>:</p>
 <pre><code>#!/usr/bin/env bb
-(babashka.deps/add-deps '{:deps {io.github.amiorin/green {…}}})
+(babashka.deps/add-deps
+  '{:deps {io.github.amiorin/green {:git/sha "REPLACE_WITH_COMMIT_SHA"}}})
 (babashka.classpath/add-classpath "resources")
 (require '[green.cli :as cli] '[green.workflow :as wf])
 
-(def workflow (wf/workflow {…}))   ;; steps, wire-fn, next-fn defined here
+(defn start-step [opts] opts)
+(defn wire-fn [step]
+  (case step
+    :app/start [start-step]))
+
+(def workflow (wf/workflow {:start :app/start :wire-fn wire-fn}))
 
 (cli/exec workflow)                ;; forwards *command-line-args*, exits</code></pre>
 
@@ -331,7 +337,7 @@ In simple words:</p>
 <tr><th>Path</th><th>What it teaches</th></tr>
 <tr><td><code>examples/zookeeper</code></td><td>Dynamic fan-out from desired state, a join at <code>:zk/zoo-cfg</code>, Selmer scaffolding plus OpenTofu, backend-as-advice, and dry-run advice.</td></tr>
 <tr><td><code>examples/multi-zookeeper</code></td><td>Workflow composition: <code>wf/step</code> turns the ZooKeeper cluster workflow into a step, the parent fans it out once per cluster, and parent advice is inherited by the embedded workflow.</td></tr>
-<tr><td><code>examples/once</code></td><td>A Basecamp ONCE-style single-VPS PaaS. It demonstrates provider-swap advice on <code>:once/compute</code> (DigitalOcean mock vs OCI mock with one output contract), a genuine fork/join (<code>compute ∥ smtp → dns → smtp-post</code>), opts threaded front-to-back, isolated tofu state per step, and scaffold-only Ansible files. See <code>examples/once/SPEC.md</code> for the full walkthrough.</td></tr>
+<tr><td><code>examples/once</code></td><td>A Basecamp ONCE-style single-VPS PaaS. It demonstrates provider-swap advice on <code>:once/compute</code> (DigitalOcean mock vs OCI mock with one output contract), a genuine fork/join (<code>compute ∥ smtp → dns → smtp-post → (ansible-local ∥ ansible-remote)</code>), opts threaded front-to-back, isolated tofu state per step, and scaffold-only Ansible files. See <code>examples/once/SPEC.md</code> for the full walkthrough.</td></tr>
 </table>
 <pre><code>cd examples/zookeeper
 ./green create --dry-run

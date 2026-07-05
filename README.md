@@ -133,7 +133,8 @@ Non-dry-run example runs require `tofu` on `PATH`; `--dry-run` only prints.
 - `examples/multi-zookeeper` — workflow composition with `wf/step` and advice
   inheritance across the composed boundary.
 - `examples/once` — a Basecamp ONCE-style single-VPS PaaS: provider-swap
-  advice for compute, a real fork/join (`compute ∥ smtp → dns → smtp-post`),
+  advice for compute, a real fork/join
+  (`compute ∥ smtp → dns → smtp-post → (ansible-local ∥ ansible-remote)`),
   threaded opts, per-step tofu state, and scaffold-only Ansible config. See
   `examples/once/SPEC.md` for the full walkthrough.
 
@@ -149,8 +150,8 @@ cd ../multi-zookeeper
 ./green delete
 
 cd ../once
-./green create --dry-run   # provider/DNS/SMTP/Ansible steps are skipped
-./green create             # fake ONCE-style VPS + DNS/SMTP + Ansible scaffolds
+./green create --dry-run   # compute/DNS/SMTP/smtp-post/Ansible steps are skipped
+./green create             # fake ONCE-style VPS + DNS/SMTP + smtp-post + Ansible scaffolds
 ./green delete
 ```
 

@@ -42,15 +42,16 @@ cd ../multi-zookeeper
 
 cd ../once
 ./green create --dry-run   # print what would run, touch nothing
-./green create             # fake ONCE-style VPS, DNS/SMTP, and Ansible scaffolds
+./green create             # fake ONCE-style VPS, DNS/SMTP, smtp-post, and Ansible scaffolds
 ./green delete
 ```
 
 Each example's `./green` script is a self-contained babashka script that
 pulls in `green` via `:local/root "../.."` — no separate build step needed
 to try changes made to `src/`. `examples/once/SPEC.md` documents the ONCE-style
-example: provider-swap advice for compute, a `compute ∥ smtp → dns` fork/join,
-threaded opts, per-step tofu state, and scaffold-only Ansible config.
+example: provider-swap advice for compute, a
+`compute ∥ smtp → dns → smtp-post → (ansible-local ∥ ansible-remote)`
+fork/join, threaded opts, per-step tofu state, and scaffold-only Ansible config.
 
 The end-to-end ZooKeeper suite (`test/green/zookeeper_test.clj`) drives real
 `tofu` over HCL containing only `locals`/`output` blocks — full
