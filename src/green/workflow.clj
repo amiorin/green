@@ -14,7 +14,8 @@
     exit propagates, with all branch results under :green/branches.
   - advice-add attaches advice to one step; advice-add-all attaches advice
     to every step. Both stack in strict add order (most recently added,
-    from either, is outermost)."
+    from either, is outermost), unless a :depth prop overrides placement
+    (lower = more outward), as in Emacs."
   (:require [green.advice :as advice])
   (:import [java.io PrintWriter StringWriter]))
 
@@ -34,12 +35,15 @@
   "Return a workflow with advice `f` added on `step` (combinator `how`,
   explicit `id`). Pure — the original workflow is untouched. Composes with
   any all-steps advice (see `advice-add-all`) in strict add order: whichever
-  was added more recently is outermost."
-  [wf step how id f]
-  (let [s (next-seq wf)]
-    (-> wf
-        (update ::advice advice/add step how id f s)
-        (assoc ::advice-seq (inc s)))))
+  was added more recently is outermost. `props` may carry :depth
+  (-100..100, default 0), which overrides add order: lower depth pushes the
+  advice outward, higher pushes it inward, as with Emacs hook depths."
+  ([wf step how id f] (advice-add wf step how id f nil))
+  ([wf step how id f props]
+   (let [s (next-seq wf)]
+     (-> wf
+         (update ::advice advice/add step how id f s props)
+         (assoc ::advice-seq (inc s))))))
 
 (defn advice-remove
   "Return a workflow with the advice registered under `id` on `step` removed."
@@ -51,12 +55,13 @@
   explicit `id`). Pure — the original workflow is untouched. Composes with
   any per-step advice in strict add order: whichever was added more
   recently is outermost, regardless of whether it came from `advice-add`
-  or `advice-add-all`."
-  [wf how id f]
-  (let [s (next-seq wf)]
-    (-> wf
-        (update ::advice-all advice/add-global how id f s)
-        (assoc ::advice-seq (inc s)))))
+  or `advice-add-all`. `props` may carry :depth, as in `advice-add`."
+  ([wf how id f] (advice-add-all wf how id f nil))
+  ([wf how id f props]
+   (let [s (next-seq wf)]
+     (-> wf
+         (update ::advice-all advice/add-global how id f s props)
+         (assoc ::advice-seq (inc s))))))
 
 (defn advice-remove-all
   "Return a workflow with the all-steps advice registered under `id` removed."
@@ -103,7 +108,7 @@
           f (first decl)]
       (when-not (fn? f)
         (throw (ex-info (str "no function wired for step " step) {:step step})))
-      (let [entries (sort-by :seq (concat (::advice-all wf) (get-in wf [::advice step])))
+      (let [entries (concat (::advice-all wf) (get-in wf [::advice step]))
             ret ((advice/compose f entries) opts)]
         (when-not (map? ret)
           (throw (ex-info (str "step " step " returned a non-map: " (pr-str ret))
