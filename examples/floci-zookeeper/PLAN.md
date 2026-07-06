@@ -59,16 +59,21 @@ ZooKeeper cluster** locally: OpenTofu (AWS provider pointed at
   - `inventory.ini`, `create.yml`, `delete.yml`, `zoo.cfg` — Ansible
     material; `zoo.cfg` is templated from the collected node IPs.
 - Workflow:
-  - `:zk/start` → fan-out one `:zk/node` per server (scaffold `main.tf` +
-    `tofu-step`, per-node local backend/state) → join `:zk/ansible`
-    (collect all IPs/ports from `:green/branches`, scaffold inventory +
-    playbooks, run `create.yml`) → `:zk/health`.
-  - **Delete routing via `wire-fn`**: on `:delete` the static graph reverses —
-    `:zk/ansible` (running `delete.yml`) comes first, then the per-node
-    tofu destroys. First example to demonstrate event-specific static routing.
-  - `:zk/health` — real verification: connect to each node's published
-    client port, send the `srvr` four-letter word, assert one leader and
-    two followers.
+  - **Create** — two fan-out/join cycles: `:zk/start` → fan-out one
+    `:zk/node` per server (scaffold `main.tf` + `tofu-step`, per-node local
+    backend/state) → join `:zk/provision` (collect all IPs from
+    `:green/branches`) → fan-out one `:zk/ansible` per server (per-node
+    inventory + full ensemble as extra-vars for `zoo.cfg`) → join
+    `:zk/health`.
+  - **Delete** — single fan-out of `wf/step` sub-workflows: `:zk/start` →
+    fan-out one `:zk/teardown` per server, each embedding a sub-workflow
+    (`:zk/ansible` running `delete-node.yml` → `:zk/node` tofu destroy).
+    `wf/step` is needed because bare `:zk/ansible → :zk/node` branches
+    would join at `:zk/node` (entries arrive from different `:zk/ansible`
+    parents). The parent's advice on `:zk/ansible` and `:zk/node` is
+    inherited into each sub-workflow by step name.
+  - `:zk/health` — real verification: connect to each node's client port,
+    send the `srvr` four-letter word, assert one leader and two followers.
 
 ## Advices
 
@@ -124,15 +129,19 @@ ZooKeeper cluster** locally: OpenTofu (AWS provider pointed at
 
 ## Verified end-to-end (2026-07-06, floci 1.5.30, tofu + AWS provider 6.53)
 
-- `./green create --dry-run` — 3-way fan-out, join, health; touches nothing.
+- `./green create --dry-run` — two fan-out/join cycles (3× node, provision,
+  3× ansible, health); touches nothing.
 - schema gate rejects a malformed `green.edn` with `:green/exit 2`.
 - `./green create` — three parallel tofu applies create Docker-backed EC2
-  instances, join into one `ansible-playbook create.yml` run, health step
-  reports `zk3=leader, zk1/zk2=follower`. Cross-node replication confirmed
-  (a znode written via `zkCli` on one node read back on another).
+  instances, provision join collects IPs, three parallel ansible runs
+  provision ZooKeeper (per-node inventory, full ensemble as extra-vars),
+  health step reports one leader and two followers. Cross-node replication
+  confirmed (a znode written via `zkCli` on one node read back on another).
 - create is idempotent (a second run re-provisions cleanly, exit 0).
-- `./green delete` — `delete.yml` deprovisions over SSH, then the per-node
-  destroys run; 0 leftover instance containers.
+- `./green delete --dry-run` — 3× teardown sub-workflows, each showing
+  ansible and node steps; touches nothing.
+- `./green delete` — three parallel `wf/step` sub-workflows, each running
+  `delete-node.yml` then tofu destroy; 0 leftover instance containers.
 
 ## Known floci quirks worked around
 

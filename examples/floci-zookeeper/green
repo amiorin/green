@@ -56,8 +56,8 @@
 (defn ssh-key [opts]
   (str (workdir opts) "/ssh/id_ed25519"))
 
-(defn inventory-file [opts]
-  (str (workdir opts) "/ansible/inventory.ini"))
+(defn node-inventory-file [opts]
+  (str (workdir opts) "/ansible/" (:id (:zk/node opts)) "/inventory.ini"))
 
 (defn- logln [& xs]
   (locking *out*
@@ -242,22 +242,23 @@
       (let [opts (sc/scaffold opts specs)]
         (tofu/tofu-step opts {:dir dir})))))
 
-(defn with-observed-nodes
-  ":filter-args advice on :zk/ansible — normalize the step's input: the
-  observed node list ({:id :name :ip :instance_id}) under :zk/nodes. On
-  create it comes from the joined branches' tofu outputs; on delete the
-  instances still exist, so it is read back from each node's tofu state
-  (nodes with no state are skipped — delete stays idempotent)."
+(defn provision-step
+  "Join step on create: collect all node IPs from the tofu branches."
   [opts]
   (assoc opts :zk/nodes
-         (if (= :delete (:green/event opts))
-           (vec (sort-by :id
-                         (keep (fn [n]
-                                 (try (let [o (tofu/outputs (node-dir opts n))]
-                                        (when (:ip o) o))
-                                      (catch Exception _ nil)))
-                               (:zk/servers opts))))
-           (->> (:green/branches opts) (map :tofu/outputs) (sort-by :id) vec))))
+         (->> (:green/branches opts) (map :tofu/outputs) (sort-by :id) vec)))
+
+(defn with-node-info
+  ":filter-args advice on :zk/ansible — on delete, read the node's IP from
+  tofu state so the inventory and step can target it. On create, :zk/nodes
+  is already set by provision-step."
+  [opts]
+  (if (and (= :delete (:green/event opts)) (nil? (:zk/nodes opts)))
+    (let [node (:zk/node opts)
+          node-info (try (tofu/outputs (node-dir opts node)) (catch Exception _ nil))]
+      (assoc opts :zk/nodes
+             (if (and node-info (:ip node-info)) [node-info] [])))
+    opts))
 
 (defn- ssh-open? [ip]
   (try (with-open [sock (java.net.Socket.)]
@@ -266,44 +267,64 @@
        (catch Exception _ false)))
 
 (defn wait-for-ssh
-  ":before advice on :zk/ansible — floci reports instances running before
-  the sshd inside them accepts connections; wait for every node's :22
-  before the playbook needs it. Skipped on delete: the instances have been
-  up for a while, and a stale state entry must not stall the teardown."
+  ":before advice on :zk/ansible — wait for this branch's node SSH to
+  accept connections before the playbook runs. Skipped on delete."
   [opts]
   (when-not (= :delete (:green/event opts))
-    (doseq [{:keys [name ip]} (:zk/nodes opts)]
+    (let [node (:zk/node opts)
+          {:keys [name ip]} (first (filter #(= (:id %) (:id node)) (:zk/nodes opts)))]
       (loop [n 60]
         (cond
           (ssh-open? ip) nil
-          (zero? n) (throw (ex-info (str "ssh on " name " (" ip ":22) never came up")
-                                    {}))
+          (zero? n) (throw (ex-info (str "ssh on " name " (" ip ":22) never came up") {}))
           :else (do (Thread/sleep 3000) (recur (dec n)))))))
   opts)
 
-(defn inventory-data
-  "Inventory for green.ansible/inventory-advice, from the observed nodes."
+(defn node-inventory-data
+  "Per-node inventory for green.ansible/inventory-advice: one host in the
+  zookeeper group, targeting this branch's node."
   [opts]
-  {"zookeeper"
-   {:hosts (mapv (fn [{:keys [id name ip]}]
-                   {:name name :vars {:ansible_host ip :zk_id id}})
-                 (:zk/nodes opts))
-    :vars {:ansible_user (:zk/user opts)
-           :ansible_python_interpreter "/usr/bin/python3"}}})
+  (let [node (:zk/node opts)
+        {:keys [ip]} (first (filter #(= (:id %) (:id node)) (:zk/nodes opts)))]
+    {"zookeeper"
+     {:hosts [{:name (:name node) :vars {:ansible_host ip :zk_id (:id node)}}]
+      :vars {:ansible_user (:zk/user opts)
+             :ansible_python_interpreter "/usr/bin/python3"}}}))
 
 (defn ansible-step
-  "Join step: one ansible-playbook run over every observed node — create.yml
-  provisions ZooKeeper, delete.yml deprovisions it (see green.ansible)."
+  "Per-node ansible: on create, provision ZooKeeper with the full ensemble
+  passed as extra-vars; on delete, run delete-node.yml to stop ZK."
   [opts]
-  (logln (str "ansible: " (ansible/playbook opts) " over "
-              (count (:zk/nodes opts)) " node(s)"
-              (when-not (= :delete (:green/event opts))
-                " — a first create takes a few minutes")))
-  (ansible/ansible-step opts
-                        {:dir (str script-dir "/ansible")
-                         :inventory (inventory-file opts)
-                         :private-key (ssh-key opts)
-                         :host-key-checking false}))
+  (let [node (:zk/node opts)
+        delete? (= :delete (:green/event opts))]
+    (if (and delete? (empty? (:zk/nodes opts)))
+      (do (logln (str "ansible: skipping " (:name node) " (no state)"))
+          opts)
+      (do
+        (logln (str "ansible: " (ansible/playbook opts {:delete "delete-node.yml"})
+                    " on " (:name node)
+                    (when-not delete? " — a first create takes a few minutes")))
+        (ansible/ansible-step opts
+                              {:dir (str script-dir "/ansible")
+                               :inventory (node-inventory-file opts)
+                               :private-key (ssh-key opts)
+                               :host-key-checking false
+                               :playbooks {:delete "delete-node.yml"}
+                               :extra-vars (when-not delete?
+                                             {:ensemble (mapv #(select-keys % [:id :ip])
+                                                              (:zk/nodes opts))})})))))
+
+(def teardown-step
+  "Per-node delete sub-workflow: ansible stop → tofu destroy, composed as a
+  single step via wf/step so 3 branches run independently (the engine would
+  join bare :zk/node entries from different :zk/ansible parents). The
+  parent's advice on :zk/ansible and :zk/node is inherited by name."
+  (wf/step
+    (wf/workflow {:start :zk/ansible
+                  :wire-fn (fn [step _run-opts]
+                             (case step
+                               :zk/ansible [ansible-step :zk/node]
+                               :zk/node    [node-step]))})))
 
 (defn- four-letter [ip port word]
   (with-open [sock (java.net.Socket.)]
@@ -357,51 +378,51 @@
 (defn wire-fn [step run-opts]
   (let [delete? (= :delete (:green/event run-opts))]
     (case step
-      :zk/start   [start-step (if delete? :zk/ansible :zk/node)]
-      :zk/node    (cond-> [node-step]
-                    (not delete?) (conj :zk/ansible))
-      :zk/ansible [ansible-step (if delete? :zk/node :zk/health)]
-      :zk/health  [health-step])))
+      :zk/start     [start-step (if delete? :zk/teardown :zk/node)]
+      :zk/node      [node-step :zk/provision]
+      :zk/provision [provision-step :zk/ansible]
+      :zk/ansible   [ansible-step :zk/health]
+      :zk/health    [health-step]
+      :zk/teardown  [teardown-step])))
 
 (defn next-fn [step default-next opts]
-  (let [delete? (= :delete (:green/event opts))]
-    (cond
-      (pos? (:green/exit opts 0)) []
-      ;; create: one tofu apply per server, in parallel; they join at ansible
-      (and (= step :zk/start) (not delete?))
-      (mapv (fn [n] [:zk/node (assoc opts :zk/node n)]) (:zk/servers opts))
-      ;; delete graph is :zk/start -> :zk/ansible -> :zk/node; after the
-      ;; deprovisioning playbook, fan out the per-node destroys
-      (and (= step :zk/ansible) delete?)
-      (mapv (fn [n] [:zk/node (assoc opts :zk/node n)]) (:zk/servers opts))
-      :else (mapv (fn [s] [s opts]) default-next))))
+  (cond
+    (pos? (:green/exit opts 0)) []
+    ;; create: fan out one tofu apply per server
+    (and (= step :zk/start) (not= :delete (:green/event opts)))
+    (mapv (fn [n] [:zk/node (assoc opts :zk/node n)]) (:zk/servers opts))
+    ;; create: fan out one ansible run per server after provision joins
+    (= step :zk/provision)
+    (mapv (fn [n] [:zk/ansible (assoc opts :zk/node n)]) (:zk/servers opts))
+    ;; delete: fan out per-node teardown (ansible stop + tofu destroy)
+    (and (= step :zk/start) (= :delete (:green/event opts)))
+    (mapv (fn [n] [:zk/teardown (assoc opts :zk/node n)]) (:zk/servers opts))
+    :else (mapv (fn [s] [s opts]) default-next)))
 
 (def workflow
   (-> (wf/workflow {:start :zk/start :wire-fn wire-fn :next-fn next-fn})
-      ;; shared key pair backend — innermost :before, runs right before start-step
+      ;; shared key pair backend
       (wf/advice-add :zk/start :before ::shared-backend
                      (tofu/local-backend-advice shared-dir))
-      ;; prerequisites first (:before = setup), gates after: later adds are
-      ;; outermost, so validation runs before floci/ssh-key setup fires
       (wf/advice-add :zk/start :before ::floci ensure-floci)
       (wf/advice-add :zk/start :before ::ssh-key ensure-ssh-key)
       (wf/advice-add :zk/start :before-while ::requirements check-requirements)
       (wf/advice-add :zk/start :before-while ::schema check-schema)
-      ;; per-node tofu state; the backend is advice, not hardwiring
+      ;; per-node tofu
       (wf/advice-add :zk/node :before ::backend
                      (tofu/local-backend-advice #(node-dir % (:zk/node %))))
       (wf/advice-add :zk/node :before-while ::inputs check-node-input)
-      ;; ansible input: ssh wait innermost, then the inventory :before
-      ;; advice, then the :filter-args node-list normalizer outermost —
-      ;; so both inner advices already see :zk/nodes
+      ;; per-node ansible: node-info populates :zk/nodes on delete (from tofu
+      ;; state), inventory writes the per-node INI, SSH wait gates create only.
+      ;; All three are inherited into the teardown sub-workflow by step name.
       (wf/advice-add :zk/ansible :before ::wait-ssh wait-for-ssh)
       (wf/advice-add :zk/ansible :before ::inventory
-                     (ansible/inventory-advice inventory-file inventory-data))
-      (wf/advice-add :zk/ansible :filter-args ::nodes with-observed-nodes)
-      ;; quorum takes a few seconds to elect; poll instead of failing fast
+                     (ansible/inventory-advice node-inventory-file node-inventory-data))
+      (wf/advice-add :zk/ansible :filter-args ::node-info with-node-info)
+      ;; health retry
       (wf/advice-add :zk/health :around ::retry (retry-advice 12 5000))
-      ;; progress + dry-run declared last; dry-run outermost so --dry-run
-      ;; suppresses both the step and its progress line
+      ;; progress + dry-run: :zk/teardown is not in the dry-run list — the
+      ;; sub-workflow's inherited advice on :zk/ansible and :zk/node handles it
       (progress/advise)
       (dry-run/advise [:zk/node :zk/ansible :zk/health])))
 

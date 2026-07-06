@@ -159,6 +159,31 @@
   <li>Finalize to one opts map: first failure wins, otherwise the last success.</li>
 </ol>
 
+<h3>Independent pipelines inside a fan-out</h3>
+<p>When <code>next-fn</code> fans out N branches and each branch traverses multiple steps in sequence (e.g. <code>:validate → :transform → :load</code>), the engine joins at the second step. The N <code>:validate</code> entries share the same fan-out parent, so they run independently; but the N <code>:transform</code> entries arrive from N different <code>:validate</code> units, so <code>same-origin?</code> is false and the scheduler treats them as convergence — running <code>:transform</code> once as a join instead of N times independently.</p>
+<p>The fix is <code>wf/step</code>: wrap the multi-step pipeline in a sub-workflow and wire the <code>wf/step</code> as a single step in the parent. The N branches all land on that one step name, sharing the same fan-out parent, so <code>same-origin?</code> is true and they run independently. Inside each branch the sub-workflow runs its own scheduler with no other branches to converge with. The parent's advice on the sub-workflow's step names is inherited by name — dry-run, backends, gates, progress all carry over without re-registration.</p>
+<pre><code>;; The per-item pipeline as a sub-workflow
+(def pipeline-wf
+  (wf/workflow {:start :validate
+                :wire-fn (fn [step _]
+                           (case step
+                             :validate  [validate-step :transform]
+                             :transform [transform-step :load]
+                             :load      [load-step]))}))
+
+;; Wire it as a single step in the parent
+(defn wire-fn [step _run-opts]
+  (case step
+    :start   [start-step :process]
+    :process [(wf/step pipeline-wf)]))
+
+;; Fan out one :process per item
+(defn next-fn [step _default-next opts]
+  (when (= step :start)
+    (mapv (fn [item] [:process (assoc opts :item item)])
+          (:items opts))))</code></pre>
+<div class="note"><strong>When you don't need <code>wf/step</code>.</strong> If the number of branches is fixed and known at design time, distinct step names work: <code>:deploy-staging</code> and <code>:deploy-production</code> never converge, so they run independently without a sub-workflow. <code>wf/step</code> is needed when the count is dynamic — N items, N nodes, N tenants.</div>
+
 <h2 id="advice">6. Advice</h2>
 <p>Advice wraps step functions without changing graph wiring. Registries are immutable workflow data; adding/removing advice returns a new workflow.</p>
 <pre><code>(-> workflow

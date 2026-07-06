@@ -94,15 +94,23 @@ PLAY RECAP parsing, inventory rendering, and inventory advice without invoking
 OpenTofu's AWS provider pointed at floci (a local AWS emulator on
 `localhost:4566`, Docker-backed EC2) creates three instances, and
 `green.ansible` provisions an actual ZooKeeper ensemble over SSH
-(`create.yml`/`delete.yml`, no user-data except a 3-line sshd bootstrap
-compensating for a floci bug). It demonstrates event-specific static routing
-(on `:delete` the ansible step runs *before* the node destroys),
-`:before-while` validation gates (schema/requirements/inputs), a
-`:filter-args` input normalizer, an `:around` retry advice polling a real
-quorum health check (`srvr` 4-letter word), and `:before` advice that keeps a
-pre-existing `floci` container usable for a clean run (restarts it and clears
-stale tofu state when no instances are present). `progress/advise` is wired in
-for step-by-step timing output. Linux-only at runtime (it connects straight to
+(`create.yml`/`delete-node.yml`, no user-data except a 3-line sshd bootstrap
+compensating for a floci bug). Create uses two fan-out/join cycles: per-node
+tofu apply (3 parallel) → provision join (collects IPs) → per-node ansible
+(3 parallel, each with a single-host inventory and the full ensemble as
+extra-vars for `zoo.cfg`) → health join (quorum check). Delete fans out 3
+`wf/step` sub-workflows, each running ansible-stop → tofu-destroy for one
+node independently — `wf/step` is needed because bare `:zk/ansible →
+:zk/node` branches would join at `:zk/node` (different parents). The
+parent's advice on `:zk/ansible` and `:zk/node` (backends, inventory, SSH
+wait, dry-run) is inherited into each sub-workflow by step name. It also
+demonstrates `:before-while` validation gates (schema/requirements/inputs),
+a `:filter-args` that reads tofu state on delete to populate the node list,
+an `:around` retry advice polling a real quorum health check (`srvr`
+4-letter word), and `:before` advice that keeps a pre-existing `floci`
+container usable for a clean run (restarts it and clears stale tofu state
+when no instances are present). `progress/advise` is wired in for
+step-by-step timing output. Linux-only at runtime (it connects straight to
 Docker-bridge IPs); `--dry-run` works anywhere and its schema gate still
 validates. See its `README.md` and `PLAN.md`.
 

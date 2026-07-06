@@ -15,12 +15,16 @@ and two followers.
 ```
 
 `create` starts floci itself if it isn't running (a `:before` advice —
-idempotent), generates an SSH keypair under `work/ssh/`, applies one tofu
-config per node in parallel, joins into a single `ansible-playbook
-create.yml` run over all observed IPs, and polls the ensemble's health.
-A second `create` is a no-op ansible run against the same cluster.
-`delete` reverses the order: `delete.yml` stops and removes ZooKeeper
-while the instances still exist, then the per-node destroys fan out.
+idempotent), generates an SSH keypair under `work/ssh/`, then runs two
+fan-out/join cycles: per-node tofu apply (3 parallel) → provision join
+(collects IPs) → per-node `ansible-playbook create.yml` (3 parallel, each
+with a single-host inventory and the full ensemble passed as extra-vars for
+`zoo.cfg`) → health join (quorum check). A second `create` is a no-op
+ansible run against the same cluster.
+`delete` fans out 3 `wf/step` sub-workflows in parallel, each running
+`delete-node.yml` to stop ZK on one node and then tofu-destroying the
+instance — `wf/step` keeps the branches independent (without it the engine
+would join the per-node `:zk/node` entries).
 
 ## Requirements
 
@@ -37,16 +41,21 @@ AWS provider instead of fetching it three times.
 ## What to look at
 
 - **`green.ansible` used like `green.tofu`**: the step is event-aware
-  (`create.yml` / `delete.yml`), and the inventory is attached as a
-  `:before` advice (`inventory-advice`), exactly like tofu backends.
-- **Event-specific static routing** in `wire-fn`: on `:delete` the ansible
-  step runs *before* the node destroys — the only example where the static
-  graph order depends on the event.
+  (`create.yml` / `delete-node.yml`), and the per-node inventory is
+  attached as a `:before` advice (`inventory-advice`), exactly like tofu
+  backends.
+- **Two fan-out/join cycles on create**: per-node tofu → provision join →
+  per-node ansible → health join. The full ensemble is passed as extra-vars
+  so each node's `zoo.cfg` knows all peers from a single-host inventory.
+- **`wf/step` for independent pipelines on delete**: each branch runs a
+  sub-workflow (ansible-stop → tofu-destroy) for one node. Without
+  `wf/step` the engine would join the per-node `:zk/node` entries because
+  they arrive from different `:zk/ansible` parents.
 - **Validation advices**: `:before-while` gates for the desired-state
   schema (pure — also runs under `--dry-run`), tool requirements, and
-  per-step inputs; a `:filter-args` advice normalizes the observed node
-  list; an `:around` retry advice polls the health check while the
-  ensemble elects a leader.
+  per-step inputs; a `:filter-args` advice reads tofu state on delete to
+  populate the node list; an `:around` retry advice polls the health check
+  while the ensemble elects a leader.
 - **The sole user-data** is a 3-line sshd bootstrap compensating for a
   floci bug (it starts sshd without creating its privilege-separation
   directory); every piece of real provisioning is Ansible over SSH.
