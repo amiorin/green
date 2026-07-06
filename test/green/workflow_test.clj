@@ -6,7 +6,7 @@
 
 (deftest linear-happy-path
   (let [w (wf/workflow {:start :t/a
-                        :wire-fn (fn [s]
+                        :wire-fn (fn [s _]
                                    (case s
                                      :t/a [(mark :a) :t/b]
                                      :t/b [(mark :b) :t/c]
@@ -17,7 +17,7 @@
 
 (deftest error-halts-without-next-fn
   (let [w (wf/workflow {:start :t/a
-                        :wire-fn (fn [s]
+                        :wire-fn (fn [s _]
                                    (case s
                                      :t/a [(mark :a) :t/b]
                                      :t/b [(fn [o] (assoc o :green/exit 3)) :t/c]
@@ -28,7 +28,7 @@
 
 (deftest exception-becomes-exit-err-trace
   (let [w (wf/workflow {:start :t/a
-                        :wire-fn (fn [s]
+                        :wire-fn (fn [s _]
                                    (case s
                                      :t/a [(fn [_] (throw (ex-info "boom" {})))
                                            :t/b]
@@ -40,7 +40,7 @@
     (is (nil? (:seen res)) ":t/b must not run")))
 
 (deftest end-step-is-an-inclusive-slice-boundary
-  (let [wire (fn [s]
+  (let [wire (fn [s _]
                (case s
                  :t/a [(mark :a) :t/b]
                  :t/b [(mark :b) :t/c]
@@ -52,9 +52,45 @@
       (is (= [:b :c]
              (:seen (wf/run (wf/workflow {:start :t/b :wire-fn wire}) {})))))))
 
+(deftest wire-fn-can-select-an-event-specific-static-graph
+  (let [w (wf/workflow
+           {:start :t/start
+            :wire-fn (fn [step run-opts]
+                       (case [(:green/event run-opts) step]
+                         [:create :t/start] [(mark :start) :t/node]
+                         [:create :t/node] [(mark :node) :t/ansible]
+                         [:create :t/ansible] [(mark :ansible)]
+                         [:delete :t/start] [(mark :start) :t/ansible]
+                         [:delete :t/ansible] [(mark :ansible) :t/node]
+                         [:delete :t/node] [(mark :node)]))})]
+    (is (= [:start :node :ansible]
+           (:seen (wf/run w {:green/event :create}))))
+    (is (= [:start :ansible :node]
+           (:seen (wf/run w {:green/event :delete}))))))
+
+(deftest wire-fn-uses-stable-run-opts-not-branch-opts
+  (let [w (wf/workflow
+           {:start :t/start
+            :wire-fn (fn [step run-opts]
+                       (case step
+                         :t/start [identity :t/work]
+                         :t/work [(mark :work)
+                                  (if (= :branch (:route run-opts))
+                                    :t/branch-done
+                                    :t/run-done)]
+                         :t/run-done [(mark :run-done)]
+                         :t/branch-done [(mark :branch-done)]))
+            :next-fn (fn [step default-next opts]
+                       (if (= step :t/start)
+                         [[:t/work (assoc opts :route :branch)]]
+                         (mapv (fn [s] [s opts]) default-next)))})
+        res (wf/run w {:route :run})]
+    (is (= [:work :run-done] (:seen res)))
+    (is (= :branch (:route res)) "the step still receives branch-local opts")))
+
 (deftest next-fn-reroutes-errors
   (let [w (wf/workflow {:start :t/a
-                        :wire-fn (fn [s]
+                        :wire-fn (fn [s _]
                                    (case s
                                      :t/a [(fn [o] (assoc o :green/exit 7)) :t/b]
                                      :t/b [(mark :b)]
@@ -71,7 +107,7 @@
 
 (deftest next-fn-nil-terminates
   (let [w (wf/workflow {:start :t/a
-                        :wire-fn (fn [s]
+                        :wire-fn (fn [s _]
                                    (case s
                                      :t/a [(mark :a) :t/b]
                                      :t/b [(mark :b)]))
@@ -83,7 +119,7 @@
   ;; :t/a forks to :t/b and :t/c; :t/c has a longer chain (:t/c -> :t/c2);
   ;; both arrive at :t/d, which must run once with both branches collected.
   (let [w (wf/workflow {:start :t/a
-                        :wire-fn (fn [s]
+                        :wire-fn (fn [s _]
                                    (case s
                                      :t/a [(mark :a) :t/b :t/c]
                                      :t/b [(mark :b) :t/d]
@@ -103,7 +139,7 @@
 
 (deftest dynamic-fan-out-and-join
   (let [w (wf/workflow {:start :t/fan
-                        :wire-fn (fn [s]
+                        :wire-fn (fn [s _]
                                    (case s
                                      :t/fan [(mark :fan) :t/work]
                                      :t/work [(fn [o] (assoc o :done (:n o)))
@@ -124,7 +160,7 @@
 
 (deftest branch-failure-skips-join-and-propagates-worst-exit
   (let [w (wf/workflow {:start :t/a
-                        :wire-fn (fn [s]
+                        :wire-fn (fn [s _]
                                    (case s
                                      :t/a [(mark :a) :t/ok :t/bad]
                                      :t/ok [(mark :ok) :t/d]
@@ -140,12 +176,12 @@
 
 (deftest workflows-compose-as-steps
   (let [sub (wf/workflow {:start :s/a
-                          :wire-fn (fn [s]
+                          :wire-fn (fn [s _]
                                      (case s
                                        :s/a [(mark :sub-a) :s/b]
                                        :s/b [(mark :sub-b)]))})
         parent (wf/workflow {:start :p/a
-                             :wire-fn (fn [s]
+                             :wire-fn (fn [s _]
                                         (case s
                                           :p/a [(mark :p-a) :p/sub]
                                           :p/sub [(wf/step sub) :p/z]
@@ -156,10 +192,10 @@
 
 (deftest sub-workflow-failure-halts-the-parent
   (let [sub (wf/workflow {:start :s/a
-                          :wire-fn (fn [_] [(fn [o] (assoc o :green/exit 4
+                          :wire-fn (fn [_ _] [(fn [o] (assoc o :green/exit 4
                                                            :green/err "sub failed"))])})
         parent (wf/workflow {:start :p/sub
-                             :wire-fn (fn [s]
+                             :wire-fn (fn [s _]
                                         (case s
                                           :p/sub [(wf/step sub) :p/z]
                                           :p/z [(mark :p-z)]))})
@@ -170,9 +206,9 @@
 
 (deftest step-in-out-scope-the-sub-workflow
   (let [sub (wf/workflow {:start :s/a
-                          :wire-fn (fn [_] [(fn [o] (assoc o :result (* 2 (:n o))))])})
+                          :wire-fn (fn [_ _] [(fn [o] (assoc o :result (* 2 (:n o))))])})
         parent (wf/workflow {:start :p/sub
-                             :wire-fn (fn [_]
+                             :wire-fn (fn [_ _]
                                         [(wf/step sub
                                                   {:in (fn [o] {:green/event (:green/event o)
                                                                 :n (:parent-n o)})
@@ -190,7 +226,7 @@
                (swap! in-flight dec)
                o)
         w (wf/workflow {:start :t/a
-                        :wire-fn (fn [s]
+                        :wire-fn (fn [s _]
                                    (case s
                                      :t/a [identity :t/x :t/y :t/z]
                                      :t/x [slow :t/d]

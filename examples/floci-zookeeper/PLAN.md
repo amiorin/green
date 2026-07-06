@@ -63,9 +63,9 @@ ZooKeeper cluster** locally: OpenTofu (AWS provider pointed at
     `tofu-step`, per-node local backend/state) → join `:zk/ansible`
     (collect all IPs/ports from `:green/branches`, scaffold inventory +
     playbooks, run `create.yml`) → `:zk/health`.
-  - **Delete routing via `next-fn`**: on `:delete` the order reverses —
+  - **Delete routing via `wire-fn`**: on `:delete` the static graph reverses —
     `:zk/ansible` (running `delete.yml`) comes first, then the per-node
-    tofu destroys. First example to demonstrate event-based dynamic routing.
+    tofu destroys. First example to demonstrate event-specific static routing.
   - `:zk/health` — real verification: connect to each node's published
     client port, send the `srvr` four-letter word, assert one leader and
     two followers.

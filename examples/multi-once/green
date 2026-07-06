@@ -208,7 +208,7 @@
 ;; swap both — exactly how multi-zookeeper's parent can replace cluster-wf's
 ;; default backend.
 
-(defn once-wire-fn [step]
+(defn once-wire-fn [step _]
   (case step
     :once/start          [start-step :once/compute :once/smtp]
     :once/compute        [compute-step :once/dns]
@@ -228,7 +228,7 @@
 
 ;; --- the composition layer: one once-wf run per deployment ------------------
 
-(defn deployments-wire-fn [step]
+(defn deployments-wire-fn [step _]
   (case step
     :multi/start [start-step :multi/deployment]
     :multi/deployment

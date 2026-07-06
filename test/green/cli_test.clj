@@ -11,7 +11,7 @@
 
 (defn- probe-wf []
   (wf/workflow {:start :t/a
-                :wire-fn (fn [s]
+                :wire-fn (fn [s _]
                            (case s
                              :t/a [(fn [o] (update o :seen (fnil conj []) [:a (:green/event o) (:x o)]))
                                    :t/b]
@@ -38,7 +38,7 @@
 
 (deftest dry-run-flag-stamps-the-key
   (let [wf (wf/workflow {:start :t/a
-                         :wire-fn (fn [_] [(fn [o] (assoc o :dry (:green/dry-run o)))])})]
+                         :wire-fn (fn [_ _] [(fn [o] (assoc o :dry (:green/dry-run o)))])})]
     (is (true? (:dry (cli/run-cli wf ["create" "-f" (state-file "{}") "--dry-run"]))))
     (is (nil? (:dry (cli/run-cli wf ["create" "-f" (state-file "{}")]))))))
 

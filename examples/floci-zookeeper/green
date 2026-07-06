@@ -354,12 +354,14 @@
 
 ;; --- workflow ----------------------------------------------------------------
 
-(defn wire-fn [step]
-  (case step
-    :zk/start   [start-step :zk/node]
-    :zk/node    [node-step :zk/ansible]
-    :zk/ansible [ansible-step :zk/health]
-    :zk/health  [health-step]))
+(defn wire-fn [step run-opts]
+  (let [delete? (= :delete (:green/event run-opts))]
+    (case step
+      :zk/start   [start-step (if delete? :zk/ansible :zk/node)]
+      :zk/node    (cond-> [node-step]
+                    (not delete?) (conj :zk/ansible))
+      :zk/ansible [ansible-step (if delete? :zk/node :zk/health)]
+      :zk/health  [health-step])))
 
 (defn next-fn [step default-next opts]
   (let [delete? (= :delete (:green/event opts))]
@@ -368,14 +370,10 @@
       ;; create: one tofu apply per server, in parallel; they join at ansible
       (and (= step :zk/start) (not delete?))
       (mapv (fn [n] [:zk/node (assoc opts :zk/node n)]) (:zk/servers opts))
-      ;; delete reverses the order: deprovision over SSH while the instances
-      ;; still exist, then fan out the per-node destroys
-      (and (= step :zk/start) delete?)
-      [[:zk/ansible opts]]
+      ;; delete graph is :zk/start -> :zk/ansible -> :zk/node; after the
+      ;; deprovisioning playbook, fan out the per-node destroys
       (and (= step :zk/ansible) delete?)
       (mapv (fn [n] [:zk/node (assoc opts :zk/node n)]) (:zk/servers opts))
-      (and (= step :zk/node) delete?)
-      []
       :else (mapv (fn [s] [s opts]) default-next))))
 
 (def workflow

@@ -105,14 +105,14 @@
 (wf/run workflow opts)                  ;; =&gt; final opts</code></pre>
 
 <h3>wire-fn — the static graph</h3>
-<p><code>(wire-fn step)</code> returns a vector containing the step function followed by its default successors:</p>
-<pre><code>(defn wire-fn [step]
+<p><code>(wire-fn step run-opts)</code> returns a vector containing the step function followed by its default successors for this run. <code>run-opts</code> is the initial opts passed to <code>wf/run</code>, so the graph may depend on stable run-level inputs such as <code>:green/event</code>.</p>
+<pre><code>(defn wire-fn [step run-opts]
   (case step
     :zk/start   [start-step :zk/node]
     :zk/node    [node-step  :zk/zoo-cfg]
     :zk/zoo-cfg [zoo-cfg-step]
     :ci/fork    [fork-step  :ci/a :ci/b]))</code></pre>
-<p>Multiple successors mean a static fork. The same graph is used for join scheduling, so keep the happy path visible even when <code>next-fn</code> adds dynamic behavior.</p>
+<p>Multiple successors mean a static fork. The same graph is used for join scheduling, so keep the happy path visible even when <code>next-fn</code> adds dynamic behavior. Do not base <code>wire-fn</code> on values produced after the run starts; route those cases in <code>next-fn</code>.</p>
 
 <h3>next-fn — the dynamic router</h3>
 <p>When present, <code>next-fn</code> decides successors after each non-end step:</p>
@@ -144,7 +144,7 @@
   <li><strong>Join:</strong> branches from different origins that converge on the same step run that step once, using the fork-point opts plus <code>:green/branches</code>.</li>
   <li><strong>Failure:</strong> a failed branch inside a fork lets siblings finish their current step, collapses the fork, skips the join, and propagates the worst exit with all branch results under <code>:green/branches</code>.</li>
 </ul>
-<div class="note"><strong>Join detection.</strong> Convergence is by qualified step name. The scheduler waits while another live branch can statically reach the same step through <code>wire-fn</code>; dynamic detours not visible in the static graph may require explicit routing care.</div>
+<div class="note"><strong>Join detection.</strong> Convergence is by qualified step name. The scheduler waits while another live branch can statically reach the same step through this run's <code>wire-fn</code> graph; dynamic detours not visible in that graph may require explicit routing care.</div>
 
 <h3>Scheduler algorithm in plain English</h3>
 <ol>
@@ -250,7 +250,7 @@
 (babashka.classpath/add-classpath "resources")
 (require '[green.cli :as cli] '[green.workflow :as wf])
 
-(defn wire-fn [step]
+(defn wire-fn [step _run-opts]
   (case step
     :app/start [identity]))
 
@@ -265,7 +265,7 @@
 <tr><td><code>examples/multi-zookeeper</code></td><td>Workflow composition: one cluster workflow embedded with <code>wf/step</code>, fanned out once per cluster, with inherited parent advice.</td></tr>
 <tr><td><code>examples/once</code></td><td>ONCE-style single VPS. Demonstrates provider-swap advice, <code>compute ∥ smtp → dns → smtp-post → (ansible-local ∥ ansible-remote)</code>, per-step tofu state, and scaffold-only Ansible files. See <code>examples/once/SPEC.md</code>.</td></tr>
 <tr><td><code>examples/multi-once</code></td><td>Many ONCE boxes from one <code>once-wf</code>. The parent replaces inherited <code>::provider</code> and <code>::backend</code> advice; S3 state keys are isolated by deployment and step. Dry-run is declared last so it skips the re-added <code>:before</code> advice too.</td></tr>
-<tr><td><code>examples/floci-zookeeper</code></td><td>Real local ZooKeeper: OpenTofu's AWS provider targets floci, Ansible provisions over SSH, event-based delete routes Ansible before destroys, validation gates use <code>:before-while</code>, <code>:filter-args</code> normalizes observed nodes, retry advice polls quorum health, and progress output is enabled.</td></tr>
+<tr><td><code>examples/floci-zookeeper</code></td><td>Real local ZooKeeper: OpenTofu's AWS provider targets floci, Ansible provisions over SSH, an event-specific static graph routes delete through Ansible before destroys, validation gates use <code>:before-while</code>, <code>:filter-args</code> normalizes observed nodes, retry advice polls quorum health, and progress output is enabled.</td></tr>
 </table>
 <pre><code>cd examples/zookeeper
 ./green create --dry-run
@@ -295,7 +295,7 @@ cd ../floci-zookeeper
 <h2 id="testing">12. Testing strategy</h2>
 <p>The suite runs under babashka (<code>bb test</code>) and the JVM (<code>clojure -X:test</code>). Under babashka, <code>bb.edn</code> explicitly requires and runs each test namespace; under the JVM, <code>deps.edn</code>'s <code>:test</code> alias uses <code>cognitect.test-runner</code> discovery.</p>
 <ul>
-  <li><code>test/green/workflow_test.clj</code> covers linear runs, errors, slices, dynamic routing, fork/join, failure collapse, concurrency, and composition.</li>
+  <li><code>test/green/workflow_test.clj</code> covers linear runs, errors, slices, event-specific static graphs, dynamic routing, fork/join, failure collapse, concurrency, and composition.</li>
   <li><code>test/green/advice_test.clj</code> covers every advice combinator, ordering/depth, all-step advice, removal/replacement, and inheritance through <code>wf/step</code>.</li>
   <li><code>test/green/scaffold_test.clj</code> covers template resolution, create/delete symmetry, and idempotent rendering.</li>
   <li><code>test/green/tofu_test.clj</code> covers backend advice rendering without invoking <code>tofu</code>.</li>
@@ -333,7 +333,7 @@ cd ../floci-zookeeper
 
 <table>
 <tr><th>Function</th><th>Signature / purpose</th></tr>
-<tr><td><code>green.workflow/workflow</code></td><td><code>{:start :end :wire-fn :next-fn} → workflow</code></td></tr>
+<tr><td><code>green.workflow/workflow</code></td><td><code>{:start :end :wire-fn :next-fn} → workflow</code>; <code>wire-fn</code> is <code>(fn [step run-opts] ...)</code></td></tr>
 <tr><td><code>green.workflow/run</code></td><td><code>workflow, opts → final opts</code></td></tr>
 <tr><td><code>green.workflow/step</code></td><td><code>workflow [, {:in :out}] → step fn</code></td></tr>
 <tr><td><code>green.workflow/advice-add</code></td><td><code>workflow, step, how, id, f [, props] → workflow</code></td></tr>

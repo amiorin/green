@@ -70,7 +70,7 @@
                  :data {:servers servers}})]
     (sc/scaffold opts specs)))
 
-(defn cluster-wire-fn [step]
+(defn cluster-wire-fn [step _]
   (case step
     :zk/start   [start-step :zk/node]
     :zk/node    [node-step :zk/zoo-cfg]
@@ -93,7 +93,7 @@
 
 ;; --- the higher-level workflow: one cluster-wf run per cluster --------------
 
-(defn clusters-wire-fn [step]
+(defn clusters-wire-fn [step _]
   (case step
     :clusters/start [start-step :clusters/cluster]
     :clusters/cluster [(wf/step cluster-wf

@@ -63,7 +63,7 @@
                  :data {:servers servers}})]
     (sc/scaffold opts specs)))
 
-(defn wire-fn [step]
+(defn wire-fn [step _]
   (case step
     :zk/start   [start-step :zk/node]
     :zk/node    [node-step :zk/zoo-cfg]

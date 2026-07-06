@@ -7,7 +7,7 @@
 
 (defn- single-step-wf []
   (wf/workflow {:start :t/step
-                :wire-fn (fn [_] [(fn [o] (log o :base))])}))
+                :wire-fn (fn [_ _] [(fn [o] (log o :base))])}))
 
 (deftest filter-return-and-lifo-stacking
   (let [base (single-step-wf)
@@ -84,7 +84,7 @@
 
 (defn- two-step-wf []
   (wf/workflow {:start :t/a
-               :wire-fn (fn [s]
+               :wire-fn (fn [s _]
                           (case s
                             :t/a [(fn [o] (log o :a)) :t/b]
                             :t/b [(fn [o] (log o :b))]))}))
@@ -254,7 +254,7 @@
   "A parent workflow that runs :p/a, then `sub` as an embedded step, then :p/z."
   [sub]
   (wf/workflow {:start :p/a
-                :wire-fn (fn [s]
+                :wire-fn (fn [s _]
                            (case s
                              :p/a [(fn [o] (log o :p-a)) :p/sub]
                              :p/sub [(wf/step sub) :p/z]
@@ -303,7 +303,7 @@
 
 (deftest inheritance-survives-a-scoping-in-fn
   (let [parent (-> (wf/workflow {:start :p/sub
-                                 :wire-fn (fn [_]
+                                 :wire-fn (fn [_ _]
                                             [(wf/step (single-step-wf)
                                                       {:in (fn [o] {:n (:n o)})})])})
                    (wf/advice-add :t/step :filter-return ::p #(log % :p)))]
@@ -312,8 +312,8 @@
 
 (deftest inheritance-is-transitive-through-nested-embeds
   (let [inner (single-step-wf)
-        mid (wf/workflow {:start :m/sub :wire-fn (fn [_] [(wf/step inner)])})
-        top (-> (wf/workflow {:start :top/sub :wire-fn (fn [_] [(wf/step mid)])})
+        mid (wf/workflow {:start :m/sub :wire-fn (fn [_ _] [(wf/step inner)])})
+        top (-> (wf/workflow {:start :top/sub :wire-fn (fn [_ _] [(wf/step mid)])})
                 (wf/advice-add :t/step :filter-return ::p #(log % :top)))]
     (is (= [:base :top] (:log (wf/run top {}))))))
 

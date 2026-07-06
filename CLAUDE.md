@@ -95,7 +95,7 @@ OpenTofu's AWS provider pointed at floci (a local AWS emulator on
 `localhost:4566`, Docker-backed EC2) creates three instances, and
 `green.ansible` provisions an actual ZooKeeper ensemble over SSH
 (`create.yml`/`delete.yml`, no user-data except a 3-line sshd bootstrap
-compensating for a floci bug). It demonstrates event-based dynamic routing
+compensating for a floci bug). It demonstrates event-specific static routing
 (on `:delete` the ansible step runs *before* the node destroys),
 `:before-while` validation gates (schema/requirements/inputs), a
 `:filter-args` input normalizer, an `:around` retry advice polling a real
@@ -111,9 +111,10 @@ validates. See its `README.md` and `PLAN.md`.
 Eight main namespaces under `src/green/`:
 
 - **`workflow.clj`** — the engine. A **step** is a plain function
-  `opts -> opts`, named by a qualified keyword. A `wire-fn` (`step ->
-  [fn & next-steps]`) is the static happy-path graph; an optional `next-fn`
-  (`step default-next opts -> [[next-step opts] ...]`) does dynamic
+  `opts -> opts`, named by a qualified keyword. A `wire-fn` (`step run-opts ->
+  [fn & next-steps]`) is the static happy-path graph for that run; it may
+  depend on stable run-level inputs such as `:green/event`. An optional
+  `next-fn` (`step default-next opts -> [[next-step opts] ...]`) does dynamic
   routing — fan-out, conditional branching, error short-circuiting.
   Multiple successors run in parallel (real `future`s); branches that
   converge on the same step **join** it once, with per-branch results
@@ -147,7 +148,7 @@ Eight main namespaces under `src/green/`:
      - Before running a step, the scheduler asks:
        - "Could another currently-running branch still reach this same step later?"
      - If yes, it waits, so the branches can join together.
-     - This uses the static workflow graph from `wire-fn`.
+     - This uses the static workflow graph from this run's `wire-fn`.
   5. Run ready work in parallel
      - Ready steps are executed using `future`, so independent branches run
        concurrently.

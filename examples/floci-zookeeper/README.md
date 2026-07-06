@@ -39,9 +39,9 @@ AWS provider instead of fetching it three times.
 - **`green.ansible` used like `green.tofu`**: the step is event-aware
   (`create.yml` / `delete.yml`), and the inventory is attached as a
   `:before` advice (`inventory-advice`), exactly like tofu backends.
-- **Event-based dynamic routing** in `next-fn`: on `:delete` the ansible
-  step runs *before* the node destroys — the only example where the graph
-  order depends on the event.
+- **Event-specific static routing** in `wire-fn`: on `:delete` the ansible
+  step runs *before* the node destroys — the only example where the static
+  graph order depends on the event.
 - **Validation advices**: `:before-while` gates for the desired-state
   schema (pure — also runs under `--dry-run`), tool requirements, and
   per-step inputs; a `:filter-args` advice normalizes the observed node

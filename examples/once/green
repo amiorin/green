@@ -170,7 +170,7 @@
 
 ;; --- wiring -----------------------------------------------------------------
 
-(defn wire-fn [step]
+(defn wire-fn [step _]
   (case step
     :once/start          [start-step :once/compute :once/smtp]
     :once/compute        [compute-step :once/dns]

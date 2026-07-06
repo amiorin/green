@@ -1,8 +1,9 @@
 (ns green.workflow
   "The workflow engine: a graph of steps threaded by an opts map.
 
-  - wire-fn: step -> [fn & next-steps] — the static happy-path graph.
-    Multiple successors run in parallel.
+  - wire-fn: (step run-opts) -> [fn & next-steps] — the static
+    happy-path graph for this run. It may depend on stable run-level inputs
+    such as :green/event. Multiple successors run in parallel.
   - next-fn (optional): (next-fn step default-next opts) -> seq of
     [next-step opts] pairs — dynamic routing, error branching, fan-out.
   - Steps report outcome via :green/exit (0 ok, >0 error), :green/err,
@@ -26,8 +27,8 @@
 
 (defn workflow
   "Construct a workflow. :start is required; :end is an optional slice
-  boundary (it runs, then the workflow stops); :wire-fn is required;
-  :next-fn is optional."
+  boundary (it runs, then the workflow stops); :wire-fn is required and
+  is called as (wire-fn step run-opts); :next-fn is optional."
   [{:keys [start end wire-fn next-fn]}]
   (when-not (keyword? start)
     (throw (ex-info "workflow :start must be a keyword" {:start start})))
@@ -130,21 +131,21 @@
 
 ;; --- static graph (for join scheduling) ---------------------------------
 
-(defn- static-successors [wire-fn step]
+(defn- static-successors [wire-fn step run-opts]
   ;; Deliberately lenient: this graph exists only for join detection, so a
   ;; name the wire-fn can't resolve (nil or a throw) just contributes no
   ;; static edges — next-fn may own routing for it. Real wiring bugs still
   ;; surface when the step runs: run-step calls the same wire-fn and converts
   ;; the failure to :green/exit. Throwing here would escape run uncaught,
   ;; bypassing the Unix-style outcome contract.
-  (try (rest (wire-fn step)) (catch Exception _ nil)))
+  (try (rest (wire-fn step run-opts)) (catch Exception _ nil)))
 
-(defn- static-graph [wire-fn start]
+(defn- static-graph [wire-fn start run-opts]
   (loop [g {} frontier [start]]
     (if-let [s (first frontier)]
       (if (contains? g s)
         (recur g (subvec frontier 1))
-        (let [succ (vec (static-successors wire-fn s))]
+        (let [succ (vec (static-successors wire-fn s run-opts))]
           (recur (assoc g s succ) (into (subvec frontier 1) succ))))
       g)))
 
@@ -197,9 +198,9 @@
 (defn- step-advice [wf step]
   (concat (::advice-all wf) (get-in wf [::advice step])))
 
-(defn- run-step [wf step opts]
+(defn- run-step [wf step run-opts opts]
   (try
-    (let [decl ((::wire-fn wf) step)
+    (let [decl ((::wire-fn wf) step run-opts)
           f (first decl)]
       (when-not (fn? f)
         (throw (ex-info (str "no function wired for step " step) {:step step})))
@@ -215,10 +216,10 @@
 (defn- next-pairs
   "Successor [step opts] pairs for `step` after it produced `opts`.
   The end step is a hard boundary; without next-fn an error halts."
-  [wf step opts]
+  [wf step run-opts opts]
   (if (= step (::end wf))
     []
-    (let [dn (seq (rest ((::wire-fn wf) step)))]
+    (let [dn (seq (rest ((::wire-fn wf) step run-opts)))]
       (if-let [nf (::next-fn wf)]
         (vec (nf step dn opts))
         (if (failed? opts)
@@ -270,11 +271,11 @@
                             :green/branches branch-opts)
                      forks)))
 
-(defn- run-single-unit [wf uid step {:keys [opts forks]}]
-  (let [opts' (run-step wf step opts)]
-    (children uid opts' (next-pairs wf step opts') forks)))
+(defn- run-single-unit [wf uid step run-opts {:keys [opts forks]}]
+  (let [opts' (run-step wf step run-opts opts)]
+    (children uid opts' (next-pairs wf step run-opts opts') forks)))
 
-(defn- run-join-unit [wf uid step entries]
+(defn- run-join-unit [wf uid step run-opts entries]
   (let [branch-opts (mapv :opts entries)
         forks (join-forks entries)
         fork-opts (if (seq forks) (:opts (peek forks)) (first branch-opts))
@@ -282,8 +283,8 @@
         worst (branch-worst-exit branch-opts)]
     (if (pos? worst)
       (failed-join-result fork-opts forks' branch-opts worst)
-      (let [opts' (run-step wf step (assoc fork-opts :green/branches branch-opts))]
-        (children uid opts' (next-pairs wf step opts') forks')))))
+      (let [opts' (run-step wf step run-opts (assoc fork-opts :green/branches branch-opts))]
+        (children uid opts' (next-pairs wf step run-opts opts') forks')))))
 
 (defn- unit-base-opts [entry entries]
   (or (:opts entry) (:opts (first entries)) {}))
@@ -295,12 +296,12 @@
   (terminal-result (scheduler-failure (unit-base-opts entry entries) t)
                    (unit-forks entry entries)))
 
-(defn- run-unit [wf {:keys [kind step entry entries]}]
+(defn- run-unit [wf run-opts {:keys [kind step entry entries]}]
   (let [uid (gensym "green-unit")]
     (try
       (case kind
-        :single (run-single-unit wf uid step entry)
-        :join (run-join-unit wf uid step entries))
+        :single (run-single-unit wf uid step run-opts entry)
+        :join (run-join-unit wf uid step run-opts entries))
       (catch Throwable t
         (failed-unit-result entry entries t)))))
 
@@ -384,15 +385,15 @@
 (defn- ready-units [by-step ready]
   (mapcat (fn [step] (step-units step (get by-step step))) ready))
 
-(defn- run-units [wf units]
-  (mapv deref (mapv (fn [unit] (future (run-unit wf unit))) units)))
+(defn- run-units [wf run-opts units]
+  (mapv deref (mapv (fn [unit] (future (run-unit wf run-opts unit))) units)))
 
-(defn- scheduler-step [wf g live finished]
+(defn- scheduler-step [wf run-opts g live finished]
   (let [by-step (group-by :step live)
         ready (ready-steps g live by-step)
         waiting (waiting-steps by-step ready)
         units (ready-units by-step ready)
-        results (run-units wf units)]
+        results (run-units wf run-opts units)]
     (collapse-doomed
      (-> []
          (into (entries-for-steps by-step waiting))
@@ -428,16 +429,18 @@
 
 (defn run
   "Run the workflow from its start step with `opts` as the initial state.
-  Returns the final opts map; its :green/exit is the workflow's exit code.
-  When `opts` carries an inherited advice registry (stamped by an
-  enclosing run through `step`), it is merged over the workflow's own
-  advice before anything runs."
+  The same initial opts are passed to `wire-fn` as `run-opts` for the
+  whole run, so the static graph stays stable. Returns the final opts map;
+  its :green/exit is the workflow's exit code. When `opts` carries an
+  inherited advice registry (stamped by an enclosing run through `step`),
+  it is merged over the workflow's own advice before anything runs."
   [wf opts]
-  (let [wf (inherit wf (::inherited opts))
-        g (static-graph (::wire-fn wf) (::start wf))]
+  (let [run-opts opts
+        wf (inherit wf (::inherited opts))
+        g (static-graph (::wire-fn wf) (::start wf) run-opts)]
     (loop [live [{:step (::start wf) :opts opts :parent ::root :forks []}]
            finished []]
       (if (empty? live)
         (finalize finished)
-        (let [[live' finished'] (scheduler-step wf g live finished)]
+        (let [[live' finished'] (scheduler-step wf run-opts g live finished)]
           (recur live' finished'))))))

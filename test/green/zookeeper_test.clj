@@ -60,7 +60,7 @@
 
 ;; --- workflow ----------------------------------------------------------------
 
-(defn wire-fn [step]
+(defn wire-fn [step _]
   (case step
     :zk/start   [start-step :zk/node]
     :zk/node    [node-step :zk/zoo-cfg]
@@ -93,7 +93,7 @@
 (def two-clusters-wf
   (wf/workflow
    {:start :clusters/start
-    :wire-fn (fn [step]
+    :wire-fn (fn [step _]
                (case step
                  :clusters/start [start-step :clusters/cluster]
                  :clusters/cluster [(wf/step cluster-wf

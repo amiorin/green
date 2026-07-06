@@ -13,7 +13,7 @@ SSH provisioning when you need it.
 (require '[green.workflow :as wf]
          '[green.cli :as cli])
 
-(defn wire-fn [step]                    ;; static graph: step -> [fn & successors]
+(defn wire-fn [step run-opts]           ;; static graph for this run
   (case step
     :zk/start   [start-step :zk/node]
     :zk/node    [node-step  :zk/zoo-cfg]
@@ -36,6 +36,9 @@ SSH provisioning when you need it.
 - Outcomes are Unix-style: `:green/exit` (0 ok), `:green/err`,
   `:green/trace`. Thrown exceptions and non-map step returns are converted to
   that contract. The engine stamps `:green/step` before each step runs.
+- `wire-fn` is called as `(wire-fn step run-opts)`, where `run-opts` is the
+  initial opts for this run. It may switch the static graph on stable inputs
+  such as `:green/event`; step-result-dependent routing belongs in `next-fn`.
 - Multiple successors run in **parallel** using `future`s. Branches converging
   on a step **join** it once with branch results under `:green/branches`. If a
   branch fails inside a fork, running siblings finish their current step, the
@@ -76,8 +79,8 @@ The scheduler is a small fork/join workflow runner:
 3. Group live branches by step. Multiple branches waiting at the same step may
    need to join.
 4. A step is ready only when no other live branch can still statically reach
-   that same step through `wire-fn` edges. This lets longer branches arrive at
-   a join before the join runs.
+   that same step through this run's `wire-fn` edges. This lets longer branches
+   arrive at a join before the join runs.
 5. Ready work runs concurrently in `future`s.
 6. After a step, zero next pairs terminates, one continues, several fork.
 7. Branches from different origins at the same step join: the join step runs

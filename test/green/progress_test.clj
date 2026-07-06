@@ -6,7 +6,7 @@
 
 (defn- simple-wf []
   (-> (wf/workflow {:start :t/a
-                    :wire-fn (fn [s]
+                    :wire-fn (fn [s _]
                                (case s
                                  :t/a [(fn [o] o) :t/b]
                                  :t/b [(fn [o] o)]))})
@@ -34,7 +34,7 @@
 (deftest progress-with-forks
   (let [w (-> (wf/workflow
                 {:start :t/start
-                 :wire-fn (fn [s]
+                 :wire-fn (fn [s _]
                             (case s
                               :t/start [(fn [o] o) :t/join]
                               :t/join [(fn [o] o)]))
@@ -51,7 +51,7 @@
 (deftest green-step-is-set-in-opts
   (let [seen (atom [])
         w (wf/workflow {:start :t/a
-                        :wire-fn (fn [s]
+                        :wire-fn (fn [s _]
                                    (case s
                                      :t/a [(fn [o] (swap! seen conj (:green/step o)) o) :t/b]
                                      :t/b [(fn [o] (swap! seen conj (:green/step o)) o)]))})

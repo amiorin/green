@@ -6,7 +6,7 @@
 
 (defn- effect-wf [effects]
   (-> (wf/workflow {:start :t/a
-                    :wire-fn (fn [s]
+                    :wire-fn (fn [s _]
                                (case s
                                  :t/a [(fn [o] (swap! effects conj :a) o) :t/b]
                                  :t/b [(fn [o] (swap! effects conj :b) o)]))})
