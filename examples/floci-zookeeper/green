@@ -25,7 +25,9 @@
   ((requiring-resolve 'babashka.classpath/add-classpath)
    (str (fs/path script-dir "resources"))))
 
-(require '[clojure.java.shell :as shell]
+(require '[cheshire.core :as json]
+         '[clojure.java.io :as io]
+         '[clojure.java.shell :as shell]
          '[clojure.string :as str]
          '[green.ansible :as ansible]
          '[green.cli :as cli]
@@ -111,8 +113,7 @@
   (when-not (:green/dry-run opts)
     (let [missing (cond-> []
                     (not (tool? "tofu" "version")) (conj "tofu")
-                    (not (tool? "ansible-playbook" "--version")) (conj "ansible-playbook")
-                    (not (tool? "docker" "ps")) (conj "docker (running daemon)"))]
+                    (not (tool? "ansible-playbook" "--version")) (conj "ansible-playbook"))]
       (when (seq missing)
         (throw (ex-info (str "missing requirements: " (str/join ", " missing))
                         {:green/exit 2})))))
@@ -128,6 +129,32 @@
 
 ;; --- prerequisites (:before = setup) ----------------------------------------
 
+(def ^:private aws-env
+  (merge (into {} (System/getenv))
+         {"AWS_ACCESS_KEY_ID" "test"
+          "AWS_SECRET_ACCESS_KEY" "test"
+          "AWS_DEFAULT_REGION" "us-east-1"}))
+
+(defn- running-instances? []
+  (try
+    (let [out (sh! "aws" "--endpoint-url" floci-endpoint
+                   "ec2" "describe-instances"
+                   "--filters" "Name=instance-state-name,Values=running,pending"
+                   "--query" "Reservations[*].Instances[*].InstanceId"
+                   "--output" "json"
+                   :env aws-env)]
+      (seq (json/parse-string out)))
+    (catch Exception _ false)))
+
+(defn- clear-tofu-state!
+  "Remove all terraform.tfstate files under workdir — after a floci restart
+  they reference resources that no longer exist."
+  [opts]
+  (doseq [f (file-seq (io/file (workdir opts)))
+          :when (and (.isFile f)
+                     (str/ends-with? (.getName f) ".tfstate"))]
+    (io/delete-file f)))
+
 (defn- floci-healthy? []
   (try (slurp (str floci-endpoint "/_localstack/health")) true
        (catch Exception _ false)))
@@ -136,35 +163,33 @@
   (loop [n 60]
     (cond
       (floci-healthy?) true
-      (zero? n) (throw (ex-info (str "floci did not become healthy on "
-                                     floci-endpoint) {}))
+      (zero? n) (throw (ex-info "floci did not become healthy" {}))
       :else (do (Thread/sleep 1000) (recur (dec n))))))
 
+(defn- remove-ec2-containers! []
+  (let [ids (not-empty
+              (str/trim
+                (sh! "docker" "ps" "-aq" "--filter" "name=floci-ec2")))]
+    (when ids
+      (apply sh! "docker" "rm" "-f" (str/split-lines ids)))))
+
+(defn- restart-floci! []
+  (remove-ec2-containers!)
+  (sh! "docker" "restart" "floci")
+  (wait-floci!))
+
 (defn ensure-floci
-  ":before advice on :zk/start — idempotent: healthy -> no-op; a stopped
-  `floci` container is started; otherwise a fresh one is run with the
-  docker socket and a persistent volume (a floci restart must not strand
-  the tofu state). Deliberately never stops floci: the cluster lives
-  inside it. Clean up manually with `docker rm -f floci`."
+  ":before advice on :zk/start — on create: if no running instances,
+  remove stale EC2 containers, restart floci (clears stale key pairs),
+  and wipe tofu state; otherwise floci is already running with live
+  instances, nothing to do."
   [opts]
   (when-not (:green/dry-run opts)
-    (when-not (floci-healthy?)
-      (logln "floci: not running — starting container")
-      (or (try (sh! "docker" "start" "floci") true
-               (catch Exception _ false))
-          (do (sh! "docker" "volume" "create" "floci-data")
-              (sh! "docker" "run" "--rm" "-v" "floci-data:/data"
-                   "alpine" "chmod" "777" "/data")
-              (sh! "docker" "run" "-d" "--name" "floci"
-                   "-p" "4566:4566"
-                   "-v" "/var/run/docker.sock:/var/run/docker.sock"
-                   "-v" "floci-data:/data"
-                   "-e" "FLOCI_STORAGE_MODE=persistent"
-                   "-e" "FLOCI_STORAGE_PERSISTENT_PATH=/data"
-                   "-u" "root"
-                   "floci/floci:latest")))
-      (wait-floci!)
-      (logln "floci: healthy on" floci-endpoint)))
+    (if (running-instances?)
+      (logln "floci: instances present — skipping restart")
+      (do (logln "floci: no instances — restarting for clean state")
+          (restart-floci!)
+          (clear-tofu-state! opts))))
   opts)
 
 (defn ensure-ssh-key
