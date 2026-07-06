@@ -204,7 +204,7 @@
       (when-not (fn? f)
         (throw (ex-info (str "no function wired for step " step) {:step step})))
       (let [ret ((advice/compose f (step-advice wf step))
-                 (stamp-inherited wf opts))]
+                 (assoc (stamp-inherited wf opts) :green/step step))]
         (when-not (map? ret)
           (throw (ex-info (str "step " step " returned a non-map: " (pr-str ret))
                           {:step step})))

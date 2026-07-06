@@ -91,6 +91,7 @@
 <tr><td><code>:green/exit</code></td><td>int</td><td>Outcome of the last step: <code>0</code> success, <code>&gt; 0</code> error. If a step returns a map without it, the runner sets it to <code>0</code>. The workflow's final <code>:green/exit</code> value becomes the process exit code.</td></tr>
 <tr><td><code>:green/err</code></td><td>string</td><td>Error message. Present when <code>:green/exit &gt; 0</code>.</td></tr>
 <tr><td><code>:green/trace</code></td><td>string</td><td>Stack trace. Present when the failure came from a thrown exception.</td></tr>
+<tr><td><code>:green/step</code></td><td>keyword</td><td>The qualified name of the step currently executing, stamped by the engine before each step runs. Overwritten on every step; available to advice and step functions (e.g. progress reporting). Not stripped on exit — persists in the result for debugging.</td></tr>
 <tr><td><code>:green/branches</code></td><td>vector of maps</td><td>At a join step (or a collapsed failed fork): the resulting <code>opts</code> of every parallel branch. Treat it as a collection; sort by your own key when order matters.</td></tr>
 </table>
 
@@ -269,6 +270,7 @@ In simple words:</p>
   <li><strong>Backends</strong> — the OpenTofu backend is not hardwired: a <code>:before</code> advice writes the backend config into the working directory before the tofu step runs (the examples use the local-filesystem helper; S3/GCS helpers are alternatives, see §8). Swapping backends means swapping one advice.</li>
   <li><strong>Provider swaps</strong> — <code>examples/once</code> keeps <code>:once/compute</code> provider-agnostic; a <code>:before</code> advice writes either the <code>digitalocean-mock</code> or <code>oci-mock</code> HCL, both emitting the same <code>{:ip :name :sudoer :user :uid}</code> contract. Swapping clouds is the same re-add-under-one-id move as swapping backends.</li>
   <li><strong>Dry-run</strong> — <code>green.dry-run/advise</code> attaches an <code>:around</code> advice (id <code>:green.dry-run/skip</code>) to the side-effecting steps you name; when <code>:green/dry-run</code> is set (the CLI's <code>--dry-run</code> flag), those steps print <code>dry-run: would run :zk/node (create)</code> and are skipped with exit 0 — the rest of the graph still threads through.</li>
+  <li><strong>Progress</strong> — <code>green.progress/advise</code> attaches an <code>:around</code> advice (id <code>:green.progress/progress</code>) to every step; it prints the step name on entry and elapsed time on exit. Reads <code>:green/step</code> from opts (stamped by the engine), so no per-step closure is needed.</li>
 </ul>
 
 <h2 id="scaffold">7. The scaffolding DSL</h2>
@@ -384,6 +386,7 @@ cd ../multi-once
 │   ├── scaffold.clj    scaffold, template resolution
 │   ├── tofu.clj        tofu-step, outputs, backend advices (local/s3/gcs)
 │   ├── dry_run.clj     dry-run advice + advise
+│   ├── progress.clj    progress advice + advise
 │   └── cli.clj         run-cli, exec, arg parsing
 ├── test/green/         advice, workflow, scaffold, cli, dry-run, tofu, zookeeper
 ├── test-resources/     zk/main.tf, zk/zoo.cfg, … (qualified-namespace layout)
@@ -419,6 +422,8 @@ cd ../multi-once
 <tr><td><code>green.tofu/gcs-backend-advice</code></td><td><code>(opts → dir), config → before-advice</code></td></tr>
 <tr><td><code>green.dry-run/advice</code></td><td><code>step → around-advice</code></td></tr>
 <tr><td><code>green.dry-run/advise</code></td><td><code>workflow, steps → workflow</code></td></tr>
+<tr><td><code>green.progress/progress</code></td><td><code>around-advice (reads :green/step from opts)</code></td></tr>
+<tr><td><code>green.progress/advise</code></td><td><code>workflow → workflow</code></td></tr>
 <tr><td><code>green.cli/run-cli</code></td><td><code>workflow [, args] → final opts</code></td></tr>
 <tr><td><code>green.cli/exec</code></td><td><code>workflow [, args] → exits process</code></td></tr>
 </table>

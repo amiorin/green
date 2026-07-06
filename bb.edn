@@ -7,6 +7,7 @@
                    [green.scaffold-test]
                    [green.cli-test]
                    [green.dry-run-test]
+                   [green.progress-test]
                    [green.tofu-test]
                    [green.ansible-test]
                    [green.zookeeper-test])
@@ -16,6 +17,7 @@
                                             'green.scaffold-test
                                             'green.cli-test
                                             'green.dry-run-test
+                                            'green.progress-test
                                             'green.tofu-test
                                             'green.ansible-test
                                             'green.zookeeper-test)]

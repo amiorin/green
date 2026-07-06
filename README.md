@@ -30,6 +30,8 @@ configuration files, OpenTofu as the muscle.
 
 - A **step** is a function `opts -> opts`, named by a qualified keyword.
 - Outcomes are Unix-style: `:green/exit` (0 ok), `:green/err`, `:green/trace`.
+  The engine stamps `:green/step` with the current step's keyword before each
+  step runs, so advice and steps can read the step name from opts.
 - Multiple wire-fn successors (or next-fn pairs) run **in parallel**; branches
   converging on a step **join** it once, with results under `:green/branches`.
 - **Advice** (Emacs `nadvice`-style, workflow-scoped): wrap, override, or
@@ -64,6 +66,8 @@ configuration files, OpenTofu as the muscle.
   shipped alternatives.
 - `green.dry-run/advise` + the `--dry-run` flag: advised steps print what
   they would do and are skipped.
+- `green.progress/advise`: an `:around` advice on every step that prints
+  step name on entry and elapsed time on exit, reading `:green/step` from opts.
 
 ## Scheduler algorithm in plain English
 

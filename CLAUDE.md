@@ -98,13 +98,14 @@ compensating for a floci bug). It demonstrates event-based dynamic routing
 `:before-while` validation gates (schema/requirements/inputs), a
 `:filter-args` input normalizer, an `:around` retry advice polling a real
 quorum health check (`srvr` 4-letter word), and a `:before` advice that
-idempotently starts floci itself. Linux-only at runtime (it connects
+idempotently starts floci itself. `progress/advise` is wired in for
+step-by-step timing output. Linux-only at runtime (it connects
 straight to Docker-bridge IPs); `--dry-run` works anywhere and its schema
 gate still validates. See its `README.md` and `PLAN.md`.
 
 ## Architecture
 
-Seven main namespaces under `src/green/`:
+Eight main namespaces under `src/green/`:
 
 - **`workflow.clj`** — the engine. A **step** is a plain function
   `opts -> opts`, named by a qualified keyword. A `wire-fn` (`step ->
@@ -228,6 +229,11 @@ Seven main namespaces under `src/green/`:
   `::skip`) to a list of steps; when `:green/dry-run` is set (stamped by
   the CLI's `--dry-run` flag) the step prints what it would do and is
   skipped instead of run.
+- **`progress.clj`** — progress reporting, built on the advice facility:
+  `progress/advise` attaches an `:around` advice (id `::progress`) to every
+  step; it prints the step name on entry and elapsed time on exit, reading
+  `:green/step` from opts. Takes only the workflow as argument (no step list
+  needed, unlike dry-run).
 - **`cli.clj`** — the thinnest layer: parses `<event> [-f|--file green.edn]
   [--start step] [--end step] [--dry-run]`, loads the desired-state EDN
   file, stamps `:green/event`, and calls `wf/run`. `cli/exec` is what a
@@ -241,7 +247,7 @@ Seven main namespaces under `src/green/`:
   through `opts`.
 - Namespaced keywords under `:green/*` are reserved for the engine's own
   control keys (`:green/exit`, `:green/err`, `:green/trace`,
-  `:green/event`, `:green/dry-run`, `:green/branches`); everything
+  `:green/event`, `:green/dry-run`, `:green/step`, `:green/branches`); everything
   project- or library-specific uses its own namespace
   (`:zk/servers`, `:tofu/outputs`, `:green.scaffold/written`, ...).
 - Every public workflow constructor/advice-transforming function (`workflow`,

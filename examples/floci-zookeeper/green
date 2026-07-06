@@ -30,6 +30,7 @@
          '[green.ansible :as ansible]
          '[green.cli :as cli]
          '[green.dry-run :as dry-run]
+         '[green.progress :as progress]
          '[green.scaffold :as sc]
          '[green.tofu :as tofu]
          '[green.workflow :as wf])
@@ -355,7 +356,9 @@
       (wf/advice-add :zk/ansible :filter-args ::nodes with-observed-nodes)
       ;; quorum takes a few seconds to elect; poll instead of failing fast
       (wf/advice-add :zk/health :around ::retry (retry-advice 12 5000))
-      ;; declared last, so ::skip is outermost and --dry-run touches nothing
+      ;; progress + dry-run declared last; dry-run outermost so --dry-run
+      ;; suppresses both the step and its progress line
+      (progress/advise)
       (dry-run/advise [:zk/node :zk/ansible :zk/health])))
 
 ;; --- CLI ---------------------------------------------------------------------
