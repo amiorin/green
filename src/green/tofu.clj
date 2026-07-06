@@ -1,9 +1,11 @@
 (ns green.tofu
-  "Event-aware OpenTofu steps: create -> init + apply, delete -> init +
-  destroy. After apply, `tofu output -json` is merged into opts under a
-  namespaced key (:tofu/outputs by default). The backend is not hardwired:
-  attach `local-backend-advice` as a :before advice to write the local
-  filesystem backend config (always local in v1)."
+  "Event-aware OpenTofu steps: any non-:delete event (conventionally
+  :create) -> init + apply, :delete -> init + destroy. After apply,
+  `tofu output -json` is merged into opts under a namespaced key
+  (:tofu/outputs by default). The backend is not hardwired: attach a
+  :before advice built by `backend-advice`, `local-backend-advice`,
+  `s3-backend-advice`, or `gcs-backend-advice` to write backend.tf before
+  the tofu command runs."
   (:require [cheshire.core :as json]
             [clojure.java.io :as io]
             [clojure.java.shell :as sh]))
@@ -88,7 +90,7 @@
     opts))
 
 (defn local-backend-advice
-  "Backend advice for the local filesystem backend (the v1 default)."
+  "Backend advice for the local filesystem backend."
   ([dir-fn] (local-backend-advice dir-fn {}))
   ([dir-fn config] (backend-advice dir-fn "local" config)))
 

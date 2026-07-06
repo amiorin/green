@@ -86,7 +86,9 @@ The end-to-end ZooKeeper suite (`test/green/zookeeper_test.clj`) drives real
 `tofu` over HCL containing only `locals`/`output` blocks — full
 render/apply/destroy cycles, zero real infrastructure — and skips when `tofu`
 is not on `PATH`. `test/green/tofu_test.clj` covers backend advice without
-invoking `tofu`.
+invoking `tofu`; `test/green/ansible_test.clj` covers playbook selection,
+PLAY RECAP parsing, inventory rendering, and inventory advice without invoking
+`ansible-playbook`.
 
 `examples/floci-zookeeper` is the one example that builds something real:
 OpenTofu's AWS provider pointed at floci (a local AWS emulator on
@@ -97,11 +99,12 @@ compensating for a floci bug). It demonstrates event-based dynamic routing
 (on `:delete` the ansible step runs *before* the node destroys),
 `:before-while` validation gates (schema/requirements/inputs), a
 `:filter-args` input normalizer, an `:around` retry advice polling a real
-quorum health check (`srvr` 4-letter word), and a `:before` advice that
-idempotently starts floci itself. `progress/advise` is wired in for
-step-by-step timing output. Linux-only at runtime (it connects
-straight to Docker-bridge IPs); `--dry-run` works anywhere and its schema
-gate still validates. See its `README.md` and `PLAN.md`.
+quorum health check (`srvr` 4-letter word), and `:before` advice that keeps a
+pre-existing `floci` container usable for a clean run (restarts it and clears
+stale tofu state when no instances are present). `progress/advise` is wired in
+for step-by-step timing output. Linux-only at runtime (it connects straight to
+Docker-bridge IPs); `--dry-run` works anywhere and its schema gate still
+validates. See its `README.md` and `PLAN.md`.
 
 ## Architecture
 

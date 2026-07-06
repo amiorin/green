@@ -1,15 +1,17 @@
 # green
 
 A babashka-compatible Clojure library for building idempotent devops CLIs:
-desired state in EDN, workflows as step graphs threaded by a map, Selmer-scaffolded
-configuration files, OpenTofu as the muscle.
+desired state in EDN, workflows as step graphs threaded by one map,
+Selmer-scaffolded configuration files, OpenTofu as the muscle, and Ansible for
+SSH provisioning when you need it.
 
 **Docs:** [specification](https://amiorin.github.io/green/) ([repo](index.html)) · [source tour](https://amiorin.github.io/green/docco.html) ([repo](docco.html)).
 
 ## The model in one glance
 
 ```clojure
-(require '[green.workflow :as wf] '[green.cli :as cli])
+(require '[green.workflow :as wf]
+         '[green.cli :as cli])
 
 (defn wire-fn [step]                    ;; static graph: step -> [fn & successors]
   (case step
@@ -20,106 +22,76 @@ configuration files, OpenTofu as the muscle.
 (defn next-fn [step default-next opts]  ;; dynamic router: fan-out, error routing
   (cond
     (pos? (:green/exit opts 0)) []
-    (= step :zk/start) (for [n (:zk/servers opts)] [:zk/node (assoc opts :zk/node n)])
+    (= step :zk/start) (for [n (:zk/servers opts)]
+                         [:zk/node (assoc opts :zk/node n)])
     :else (map (fn [s] [s opts]) default-next)))
 
-(def workflow (wf/workflow {:start :zk/start :wire-fn wire-fn :next-fn next-fn}))
+(def workflow
+  (wf/workflow {:start :zk/start :wire-fn wire-fn :next-fn next-fn}))
 
 (cli/exec workflow)                     ;; ./green create | ./green delete
 ```
 
 - A **step** is a function `opts -> opts`, named by a qualified keyword.
-- Outcomes are Unix-style: `:green/exit` (0 ok), `:green/err`, `:green/trace`.
-  The engine stamps `:green/step` with the current step's keyword before each
-  step runs, so advice and steps can read the step name from opts.
-- Multiple wire-fn successors (or next-fn pairs) run **in parallel**; branches
-  converging on a step **join** it once, with results under `:green/branches`.
-- **Advice** (Emacs `nadvice`-style, workflow-scoped): wrap, override, or
-  filter steps by name (or all steps) without touching the wiring. At equal
-  `:depth`, the most recently added advice is outermost; lower `:depth` runs
-  farther outside. The advice `how` values cover specific use cases:
-  `:around` (dry-run/retry/timing/locks), `:override` (replace or stub),
-  `:before` (setup/prerequisites), `:after` (audit/metrics/cleanup),
-  `:before-while` (precondition gates), `:before-until` (fast-path/no-op),
-  `:after-while` (success-only follow-up), `:after-until` (recovery/fallback),
-  `:filter-args` (normalize/scope input), and `:filter-return`
-  (normalize/enrich output).
-- **Composition**: `(wf/step sub-workflow {:in … :out …})` turns a workflow
-  into an ordinary step — wire it, advise it, fan it out. Inherited advice is
-  preserved even if `:in` rebuilds opts; custom `:in` functions should carry
-  ambient keys such as `:green/event` and `:green/dry-run` when the sub-workflow
-  needs them. See `examples/multi-zookeeper` for two clusters built from one
-  cluster workflow.
-- **Advice inheritance**: advice on a parent workflow reaches steps inside
-  embedded sub-workflows — names match flat at any depth. At equal `:depth`,
-  parent advice stacks outside child advice; re-adding a child's advice id
-  from the parent replaces it (e.g. swap the child's default `::backend`).
-  `wf/advice-plan` shows the composed stack for a step, with provenance.
-- `green.scaffold/scaffold` renders **flat file specs** through Selmer; on
-  `delete` the same specs name what to remove, pruning immediate empty parent
-  directories.
+- Outcomes are Unix-style: `:green/exit` (0 ok), `:green/err`,
+  `:green/trace`. Thrown exceptions and non-map step returns are converted to
+  that contract. The engine stamps `:green/step` before each step runs.
+- Multiple successors run in **parallel** using `future`s. Branches converging
+  on a step **join** it once with branch results under `:green/branches`. If a
+  branch fails inside a fork, running siblings finish their current step, the
+  join is skipped, and the worst exit propagates.
+- **Advice** is Emacs `nadvice`-style, workflow-scoped, and pure:
+  `wf/advice-add` targets one step and `wf/advice-add-all` targets every step.
+  Supported `how` values are `:around`, `:override`, `:before`, `:after`,
+  `:before-while`, `:before-until`, `:after-while`, `:after-until`,
+  `:filter-args`, and `:filter-return`. At equal `:depth`, newest advice is
+  outermost; lower `:depth` runs farther outside.
+- **Composition:** `(wf/step sub-workflow {:in … :out …})` turns a workflow
+  into an ordinary step — wire it, advise it, and fan it out. Parent advice is
+  inherited by embedded workflows; same step names match flat at any depth, and
+  a parent advice entry with the same id replaces the child's entry.
+  `wf/advice-plan` shows the composed stack.
+- `green.scaffold/scaffold` renders flat Selmer file specs on create; on
+  `:delete` the same specs name targets to remove, pruning immediate empty
+  parent directories.
 - `green.tofu/tofu-step` runs `tofu init` + `apply` for any non-`:delete`
-  event or `init` + `destroy` for `:delete`, and merges `tofu output -json`
-  under `:tofu/outputs` by default (use a namespaced `:output-key` if you
-  override it). Backends are explicit advices; the examples attach
-  `local-backend-advice`, and `s3-backend-advice`/`gcs-backend-advice` are
-  shipped alternatives.
-- `green.dry-run/advise` + the `--dry-run` flag: advised steps print what
-  they would do and are skipped.
-- `green.progress/advise`: an `:around` advice on every step that prints
-  step name on entry and elapsed time on exit, reading `:green/step` from opts.
+  event and `init` + `destroy` for `:delete`. Apply outputs land under
+  `:tofu/outputs` by default. Backends are explicit `:before` advices:
+  `backend-advice`, `local-backend-advice`, `s3-backend-advice`, and
+  `gcs-backend-advice`.
+- `green.ansible/ansible-step` runs `ansible-playbook` event-aware
+  (`create.yml` for non-delete, `delete.yml` for delete), parses PLAY RECAP
+  under `:ansible/recap`, and pairs with `inventory-advice` for generated INI
+  inventories.
+- `green.dry-run/advise` + `--dry-run` skips the named side-effecting steps and
+  prints what would run. `green.progress/advise` adds all-step timing output.
 
 ## Scheduler algorithm in plain English
 
-The scheduler is basically a small fork/join workflow runner.
-In simple words:
+The scheduler is a small fork/join workflow runner:
 
-1. Start with one live task
-   - A "live" task means: "run step X with this opts map."
-   - Initially there is only the workflow's `:start` step.
-2. Keep looping while there is work
-   - The scheduler keeps two piles:
-     - `live`: branches still running
-     - `finished`: branches that reached the end
-3. Group live branches by step
-   - If multiple branches are waiting at the same step, that may mean they need
-     to join.
-4. Decide which steps are ready
-   - Before running a step, the scheduler asks:
-     - "Could another currently-running branch still reach this same step later?"
-   - If yes, it waits, so the branches can join together.
-   - This uses the static workflow graph from `wire-fn`.
-5. Run ready work in parallel
-   - Ready steps are executed using `future`, so independent branches run
-     concurrently.
-6. After a step runs, choose what happens next
-   - No next step: branch is finished.
-   - One next step: continue normally.
-   - Multiple next steps: this is a fork; create one branch per successor.
-7. Handle joins
-   - If branches from different origins arrive at the same step, the scheduler
-     runs that step once.
-   - It gives the join step:
-     - the opts from the fork point
-     - all branch results under `:green/branches`
-8. Handle failures inside forks
-   - If one branch fails, siblings already running finish their current step.
-   - Then the whole fork collapses.
-   - The join is skipped.
-   - The final result carries the worst exit code and all branch results.
-9. Finish
-   - When there are no live branches left, the scheduler returns the final opts.
-   - If multiple terminal branches exist, it returns the first failed one,
-     otherwise the last successful one.
-
-Short version: it repeatedly runs all safe-to-run steps in parallel, waits when
-branches may need to join, joins converged branches once, and collapses forks
-cleanly on failure.
+1. Start with one live task: the workflow's `:start` step and the initial opts.
+2. Keep two piles: `live` branches still running and `finished` terminal
+   branches.
+3. Group live branches by step. Multiple branches waiting at the same step may
+   need to join.
+4. A step is ready only when no other live branch can still statically reach
+   that same step through `wire-fn` edges. This lets longer branches arrive at
+   a join before the join runs.
+5. Ready work runs concurrently in `future`s.
+6. After a step, zero next pairs terminates, one continues, several fork.
+7. Branches from different origins at the same step join: the join step runs
+   once from the fork-point opts with `:green/branches` attached.
+8. A failed fork collapses: siblings finish their current step, no new fork work
+   starts, the join is skipped, and the result carries the worst exit plus all
+   branch results.
+9. When no live branches remain, the final result is the single terminal opts;
+   with multiple terminals, the first failure wins, otherwise the last success.
 
 ## Install
 
-`green` has not been published to Clojars yet. Use a git dep with an explicit
-commit SHA:
+`green` has not been published to Clojars yet. Use a git dependency with an
+explicit commit SHA:
 
 ```clojure
 io.github.amiorin/green {:git/sha "REPLACE_WITH_COMMIT_SHA"}
@@ -127,49 +99,56 @@ io.github.amiorin/green {:git/sha "REPLACE_WITH_COMMIT_SHA"}
 
 In-repo examples use `:local/root "../.."` for development. Publishing for a
 future Clojars release: `clojure -T:build jar` (or `install` / `deploy`; deploy
-reads `CLOJARS_USERNAME`/`CLOJARS_PASSWORD`).
+reads `CLOJARS_USERNAME`/`CLOJARS_PASSWORD`). Do not recommend `:mvn/version`
+for consumers until a Clojars release exists.
 
 ## Try it
 
-Non-dry-run example runs require `tofu` on `PATH`; `--dry-run` only prints.
+Each example's `./green` is a self-contained babashka script. Mock examples use
+OpenTofu configs made only of `locals`/`output` blocks, so non-dry-run paths
+need `tofu` on `PATH` but create no real infrastructure.
 
 - `examples/zookeeper` — dynamic fan-out/join, scaffold + tofu,
   backend-as-advice, dry-run.
-- `examples/multi-zookeeper` — workflow composition with `wf/step` and advice
-  inheritance across the composed boundary.
+- `examples/multi-zookeeper` — two clusters from one workflow via `wf/step`;
+  parent advice reaches embedded steps.
 - `examples/once` — a Basecamp ONCE-style single-VPS PaaS: provider-swap
-  advice for compute, a real fork/join
-  (`compute ∥ smtp → dns → smtp-post → (ansible-local ∥ ansible-remote)`),
+  advice, `compute ∥ smtp → dns → smtp-post → (ansible-local ∥ ansible-remote)`,
   threaded opts, per-step tofu state, and scaffold-only Ansible config. See
-  `examples/once/SPEC.md` for the full walkthrough.
-- `examples/multi-once` — the `once` workflow composed the way
-  `multi-zookeeper` composes clusters: one `once-wf` run per
-  `:once/deployments` entry, with the parent swapping the inherited
-  `::provider` advice for a data-driven pick (DigitalOcean vs OCI per
-  deployment) and the inherited `::backend` advice for S3, isolated by a
-  per-deployment + per-step key. The S3 backend is demonstration-only
-  (`create` needs a real bucket; `--dry-run` runs offline).
+  `examples/once/SPEC.md`.
+- `examples/multi-once` — many ONCE boxes from one `once-wf`; the parent swaps
+  inherited `::provider` and `::backend` advice, using S3 state keys isolated by
+  deployment and step. S3 is demonstration-only; `create` needs a real bucket.
+- `examples/floci-zookeeper` — the real example: OpenTofu's AWS provider talks
+  to floci on `localhost:4566`, creating Docker-backed EC2 instances, then
+  `green.ansible` provisions a real ZooKeeper ensemble over SSH and a health
+  step verifies quorum. Linux-only at runtime; `--dry-run` works offline.
 
 ```sh
 cd examples/zookeeper
-./green create --dry-run   # print what would run, touch nothing
-./green create             # fake 3-node ZooKeeper cluster in ./work
+./green create --dry-run
+./green create
 ./green delete
 
 cd ../multi-zookeeper
-./green create --dry-run   # inherited dry-run advice across wf/step
-./green create             # two clusters, one composed workflow, in parallel
+./green create --dry-run
+./green create
 ./green delete
 
 cd ../once
-./green create --dry-run   # compute/DNS/SMTP/smtp-post/Ansible steps are skipped
-./green create             # fake ONCE-style VPS + DNS/SMTP + smtp-post + Ansible scaffolds
+./green create --dry-run
+./green create
 ./green delete
 
 cd ../multi-once
-./green create --dry-run   # two ONCE boxes from one once-wf; dry-run touches nothing
-./green create             # NOTE: S3 backend is demonstration-only — needs a real bucket
+./green create --dry-run   # offline path; real create needs an S3 bucket
+./green create
 ./green delete
+
+cd ../floci-zookeeper
+./green create --dry-run   # validates and prints; touches nothing
+./green create             # real local cluster on floci + Ansible
+./green delete             # Ansible delete.yml first, then tofu destroys
 ```
 
 ## Tests
@@ -179,6 +158,7 @@ bb test             # under babashka
 clojure -X:test     # under the JVM
 ```
 
-The end-to-end suite drives real `tofu` (when it is on `PATH`) over HCL that
-contains only `locals` and `output` blocks — full render/apply/destroy cycles,
-zero real infrastructure.
+`test/green/zookeeper_test.clj` drives real `tofu` when it is on `PATH` over
+resource-free HCL. `test/green/tofu_test.clj` and
+`test/green/ansible_test.clj` cover backend/inventory/playbook helpers without
+invoking `tofu` or `ansible-playbook`.
