@@ -32,9 +32,16 @@
 
 (def repo-root (fs/canonicalize (fs/path script-dir "../..")))
 
-(babashka.deps/add-deps
- {:deps {'io.github.amiorin/green {:local/root (str repo-root)}}})
-(babashka.classpath/add-classpath (str (fs/path script-dir "resources")))
+;; Under babashka, pull in green + this example's resources at runtime.
+;; Under the JVM (e.g. cider-jack-in with clojure-cli) these namespaces don't
+;; exist and the sibling deps.edn supplies the classpath instead, so the whole
+;; block is skipped. requiring-resolve keeps the JVM compiler from ever seeing
+;; the babashka-only vars.
+(when (System/getProperty "babashka.version")
+  ((requiring-resolve 'babashka.deps/add-deps)
+   {:deps {'io.github.amiorin/green {:local/root (str repo-root)}}})
+  ((requiring-resolve 'babashka.classpath/add-classpath)
+   (str (fs/path script-dir "resources"))))
 
 (require '[clojure.java.io :as io]
          '[clojure.string :as str]
