@@ -1,0 +1,17 @@
+---
+# Deprovision ZooKeeper while the instances still exist — the workflow
+# routes this playbook BEFORE the per-node tofu destroys on :delete.
+# Only raw tasks: delete must work even if create never got as far as
+# bootstrapping Python.
+
+- name: Stop and remove ZooKeeper
+  hosts: zookeeper
+  gather_facts: false
+  tasks:
+    - name: Stop ZooKeeper (best effort)
+      raw: /opt/zookeeper/bin/zkServer.sh stop || true
+      changed_when: false
+
+    - name: Remove installation and data
+      raw: rm -rf /opt/zookeeper /opt/apache-zookeeper-* /var/lib/zookeeper
+      changed_when: false

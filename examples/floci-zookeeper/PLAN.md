@@ -84,19 +84,63 @@ ZooKeeper cluster** locally: OpenTofu (AWS provider pointed at
 - `dry-run/advise` on all effectful steps; `--dry-run` stays the offline
   path and touches nothing.
 
-## Open points to settle by probing floci first
+## Probe findings (floci 1.5.30, settled)
 
-1. Does floci honor `private_ip` on `aws_instance`? If not: Ansible templates
-   `zoo.cfg` from the actual IPs it collects anyway (the design is robust
-   either way).
-2. How SSH key injection and published-port discovery surface in practice
-   (which describe fields / resource attributes the outputs can read).
+1. **`private_ip` is not honored** — floci assigns the Docker bridge IP and
+   ignores the request. Consequence: `green.edn` carries no IPs; Ansible
+   templates `zoo.cfg` from the observed IPs.
+2. **The AWS API does not expose published host ports** (not in
+   describe-instances, not in tags — only floci's logs). But on Linux the
+   bridge IPs are directly routable from the host and
+   `aws_instance.private_ip` reports the real container IP — so SSH,
+   quorum traffic, and the health check all use the private IP straight
+   from the tofu outputs. No host-port plumbing at all. (Non-Linux Docker
+   Desktop cannot route to bridge IPs; documented limitation.)
+3. **Outbound network works** from instance containers (https + apt OK).
+4. **floci bug: sshd dies at boot on every AMI** — floci starts sshd without
+   creating its privilege-separation directory (`/run/sshd` on
+   Debian/Ubuntu, `/var/empty/sshd` on Amazon Linux). Fix chosen by the
+   user: a minimal, sshd-only user-data bootstrap (mkdir the privsep dirs +
+   start sshd), verified working. This is the sole user-data exception; all
+   provisioning stays in Ansible.
+5. Selmer and Jinja2 both use `{{ }}`: playbooks and `zoo.cfg.j2` are
+   **static files** (not Selmer-scaffolded) so the braces never collide;
+   only data-dependent files (per-node `main.tf`, the inventory) are
+   generated.
 
 ## Finish line
 
-- E2E test that skips unless floci is reachable and `tofu` +
-  `ansible-playbook` are on PATH (like `zookeeper_test.clj`); new test
-  namespaces added to both `bb.edn` (`:requires` + `run-tests`) and JVM
-  discovery.
+- `green.ansible` unit-tested (`test/green/ansible_test.clj`: playbook
+  selection, PLAY RECAP parsing, INI inventory rendering, inventory
+  advice), added to both `bb.edn` (`:requires` + `run-tests`) and JVM
+  discovery. No heavyweight floci e2e is wired into the suite — that would
+  make `bb test` require Docker + a running floci and take minutes. This
+  matches the repo pattern: only the fake-HCL `zookeeper_test.clj` runs
+  real `tofu`; the other examples (`multi-zookeeper`, `once`, `multi-once`)
+  are verified by driving `./green`. floci-zookeeper is likewise verified
+  end-to-end by `./green create`/`delete` against a real floci.
 - `bb test` and `clojure -X:test` green.
 - CLAUDE.md updated (new namespace, new example, commands block).
+
+## Verified end-to-end (2026-07-06, floci 1.5.30, tofu + AWS provider 6.53)
+
+- `./green create --dry-run` — 3-way fan-out, join, health; touches nothing.
+- schema gate rejects a malformed `green.edn` with `:green/exit 2`.
+- `./green create` — three parallel tofu applies create Docker-backed EC2
+  instances, join into one `ansible-playbook create.yml` run, health step
+  reports `zk3=leader, zk1/zk2=follower`. Cross-node replication confirmed
+  (a znode written via `zkCli` on one node read back on another).
+- create is idempotent (a second run re-provisions cleanly, exit 0).
+- `./green delete` — `delete.yml` deprovisions over SSH, then the per-node
+  destroys run; 0 leftover instance containers.
+
+## Known floci quirks worked around
+
+- sshd privsep dir missing → sshd-only user-data bootstrap.
+- floci marks instances `running` before sshd accepts connections →
+  `::wait-ssh` `:before` advice polls port 22 per node.
+- `zkServer.sh status` races the server post-restart → the start task's
+  `failed_when` treats "already running" as success (health verifies for
+  real).
+- AWS provider needs `skip_requesting_account_id = true` (no STS/IAM on
+  floci) and must not pass the removed `skip_requested_account_id`.

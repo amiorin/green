@@ -54,6 +54,11 @@ cd ../multi-once
 ./green create --dry-run   # two ONCE boxes from one once-wf; dry-run touches nothing
 ./green create             # NOTE: S3 backend is demonstration-only — needs a real bucket
 ./green delete
+
+cd ../floci-zookeeper
+./green create --dry-run   # print the run; touches nothing, needs nothing
+./green create             # REAL 3-node ZooKeeper on floci (local AWS emulator)
+./green delete             # ansible delete.yml first, then tofu destroys
 ```
 
 `examples/multi-once` composes the single-VPS `once` workflow the way
@@ -83,9 +88,23 @@ render/apply/destroy cycles, zero real infrastructure — and skips when `tofu`
 is not on `PATH`. `test/green/tofu_test.clj` covers backend advice without
 invoking `tofu`.
 
+`examples/floci-zookeeper` is the one example that builds something real:
+OpenTofu's AWS provider pointed at floci (a local AWS emulator on
+`localhost:4566`, Docker-backed EC2) creates three instances, and
+`green.ansible` provisions an actual ZooKeeper ensemble over SSH
+(`create.yml`/`delete.yml`, no user-data except a 3-line sshd bootstrap
+compensating for a floci bug). It demonstrates event-based dynamic routing
+(on `:delete` the ansible step runs *before* the node destroys),
+`:before-while` validation gates (schema/requirements/inputs), a
+`:filter-args` input normalizer, an `:around` retry advice polling a real
+quorum health check (`srvr` 4-letter word), and a `:before` advice that
+idempotently starts floci itself. Linux-only at runtime (it connects
+straight to Docker-bridge IPs); `--dry-run` works anywhere and its schema
+gate still validates. See its `README.md` and `PLAN.md`.
+
 ## Architecture
 
-Six main namespaces under `src/green/`:
+Seven main namespaces under `src/green/`:
 
 - **`workflow.clj`** — the engine. A **step** is a plain function
   `opts -> opts`, named by a qualified keyword. A `wire-fn` (`step ->
@@ -192,6 +211,18 @@ Six main namespaces under `src/green/`:
   hardwired — they're attached as `:before` advice
   (`local-backend-advice`/`s3-backend-advice`/`gcs-backend-advice`) that
   writes `backend.tf` before the step runs.
+- **`ansible.clj`** — event-aware Ansible steps, modeled on `tofu.clj`:
+  any non-`:delete` event runs the `:create` playbook (`create.yml` by
+  default), `:delete` runs the `:delete` one — both via `ansible-playbook`
+  in `:dir`, with optional `:private-key`, `:user`, `:extra-vars` (JSON
+  `-e`), and `:host-key-checking false` (exports
+  `ANSIBLE_HOST_KEY_CHECKING=False` for ephemeral/emulated hosts). On
+  success the parsed PLAY RECAP lands under `:ansible/recap` (per-host
+  ok/changed/failed counters; override with `:recap-key`, keep it
+  namespaced). Inventories are not hardwired — `inventory-advice` is a
+  `:before` advice writing an INI inventory from a function of opts,
+  exactly like tofu's backend advices; `inventory-ini` renders
+  `{group {:hosts [{:name .. :vars {..}}] :vars {..}}}` deterministically.
 - **`dry_run.clj`** — dry-run is built on the advice facility rather than
   hardwired into steps: `dry-run/advise` attaches `:around` advice (id
   `::skip`) to a list of steps; when `:green/dry-run` is set (stamped by
