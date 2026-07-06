@@ -1,6 +1,8 @@
 {:paths ["src" "resources" "test" "test-resources"]
  :tasks
- {test {:doc "Run the test suite under babashka"
+ {docco {:doc "Regenerate docco.html from source comments and curated notes"
+         :task (load-file "tasks/docco.clj")}
+  test {:doc "Run the test suite under babashka"
         :requires ([clojure.test]
                    [green.advice-test]
                    [green.workflow-test]
