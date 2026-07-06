@@ -20,11 +20,6 @@ provider "aws" {
   }
 }
 
-resource "aws_key_pair" "zk" {
-  key_name   = "zk-{{node.name}}"
-  public_key = file("{{pubkey}}")
-}
-
 resource "aws_security_group" "zk" {
   name        = "zk-{{node.name}}"
   description = "zookeeper {{node.name}}"
@@ -61,7 +56,7 @@ resource "aws_security_group" "zk" {
 resource "aws_instance" "zk" {
   ami                    = "{{ami}}"
   instance_type          = "{{instance-type}}"
-  key_name               = aws_key_pair.zk.key_name
+  key_name               = "{{key-name}}"
   vpc_security_group_ids = [aws_security_group.zk.id]
 
   user_data = <<-EOT

@@ -45,6 +45,9 @@
 (defn workdir [opts]
   (example-path (:zk/workdir opts)))
 
+(defn shared-dir [opts]
+  (str (workdir opts) "/shared"))
+
 (defn node-dir [opts node]
   (str (workdir opts) "/nodes/" (:id node)))
 
@@ -178,7 +181,22 @@
 
 ;; --- steps -------------------------------------------------------------------
 
-(defn start-step [opts] opts)
+(defn start-step
+  "Create/destroy the shared key pair (one tofu root, run once before the
+  per-node fan-out). Skipped under --dry-run."
+  [opts]
+  (if (:green/dry-run opts)
+    opts
+    (let [dir (shared-dir opts)
+          specs [{:template :zk/shared.tf
+                  :target (str dir "/shared.tf")
+                  :data {:endpoint floci-endpoint
+                         :pubkey (str (ssh-key opts) ".pub")}}]]
+      (if (= :delete (:green/event opts))
+        (let [opts (tofu/tofu-step opts {:dir dir :output-key :zk/shared})]
+          (if (pos? (:green/exit opts 0)) opts (sc/scaffold opts specs)))
+        (let [opts (sc/scaffold opts specs)]
+          (tofu/tofu-step opts {:dir dir :output-key :zk/shared}))))))
 
 (defn node-step
   "Scaffold one node's main.tf and drive tofu over it. On delete, destroy
@@ -192,7 +210,7 @@
                        :ami (:zk/ami opts)
                        :instance-type (:zk/instance-type opts "t3.micro")
                        :endpoint floci-endpoint
-                       :pubkey (str (ssh-key opts) ".pub")}}]]
+                       :key-name "zk"}}]]
     (if (= :delete (:green/event opts))
       (let [opts (tofu/tofu-step opts {:dir dir})]
         (if (pos? (:green/exit opts 0)) opts (sc/scaffold opts specs)))
@@ -337,6 +355,9 @@
 
 (def workflow
   (-> (wf/workflow {:start :zk/start :wire-fn wire-fn :next-fn next-fn})
+      ;; shared key pair backend — innermost :before, runs right before start-step
+      (wf/advice-add :zk/start :before ::shared-backend
+                     (tofu/local-backend-advice shared-dir))
       ;; prerequisites first (:before = setup), gates after: later adds are
       ;; outermost, so validation runs before floci/ssh-key setup fires
       (wf/advice-add :zk/start :before ::floci ensure-floci)
