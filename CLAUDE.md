@@ -49,7 +49,26 @@ cd ../once
 ./green create --dry-run   # print what would run, touch nothing
 ./green create             # fake ONCE-style VPS, DNS/SMTP, smtp-post, and Ansible scaffolds
 ./green delete
+
+cd ../multi-once
+./green create --dry-run   # two ONCE boxes from one once-wf; dry-run touches nothing
+./green create             # NOTE: S3 backend is demonstration-only — needs a real bucket
+./green delete
 ```
+
+`examples/multi-once` composes the single-VPS `once` workflow the way
+`multi-zookeeper` composes the cluster workflow: `green.edn` holds a seq of
+`:once/deployments`, and a parent workflow forks one `once-wf` run per
+deployment via `wf/step`. It swaps two inherited advices on the embedded
+steps under their original ids — `::provider` becomes data-driven
+(`:eu` → digitalocean, `:us` → oci, read from a per-deployment
+`:once/provider`) and `::backend` becomes S3, isolated by a per-deployment
++ per-step `:key` (`once/<deployment>/<step>/terraform.tfstate`) so no two of
+the `2×4` tofu states collide. The parent declares `dry-run/advise` **last**,
+so `::skip` outranks the re-added `:before` provider/backend advice and
+`--dry-run` skips them too (touches nothing). The S3 backend is
+demonstration-only: `create` needs a real bucket, so the offline path is
+`--dry-run`.
 
 Each example's `./green` script is a self-contained babashka script that
 pulls in `green` via `:local/root "../.."` — no separate build step needed

@@ -12,8 +12,18 @@
 ;;   smtp ----+                              +-> ansible-remote (playbook)
 ;;
 ;; See SPEC.md for the full design.
-(babashka.deps/add-deps '{:deps {io.github.amiorin/green {:local/root "../.."}}})
-(babashka.classpath/add-classpath "resources")
+(require '[babashka.fs :as fs])
+
+(def script-dir
+  (if (= "NO_SOURCE_PATH" *file*)
+    (fs/cwd)
+    (fs/parent (fs/canonicalize *file*))))
+
+(def repo-root (fs/canonicalize (fs/path script-dir "../..")))
+
+(babashka.deps/add-deps
+ {:deps {'io.github.amiorin/green {:local/root (str repo-root)}}})
+(babashka.classpath/add-classpath (str (fs/path script-dir "resources")))
 
 (require '[clojure.java.io :as io]
          '[clojure.string :as str]
@@ -26,7 +36,13 @@
 ;; --- paths: one isolated tofu working dir per step --------------------------
 ;; Dir names are the generic resource they hold (server, smtp), not the step.
 
-(defn workdir [opts] (:once/workdir opts))
+(defn example-path [path]
+  (when path
+    (let [p (fs/path path)]
+      (str (if (fs/absolute? p) p (fs/path script-dir p))))))
+
+(defn workdir [opts]
+  (example-path (:once/workdir opts)))
 (defn step-dir [opts nm] (str (workdir opts) "/" nm))
 (defn server-dir [opts] (step-dir opts "server"))
 (defn smtp-dir [opts] (step-dir opts "smtp"))
@@ -176,4 +192,29 @@
       (dry-run/advise [:once/compute :once/smtp :once/dns :once/smtp-post
                        :once/ansible-local :once/ansible-remote])))
 
-(cli/exec workflow)
+(defn file-arg? [arg]
+  (or (= "-f" arg)
+      (= "--file" arg)
+      (str/starts-with? (str arg) "--file=")))
+
+(defn default-args [args]
+  (let [args (vec args)]
+    (cond-> args
+      (not-any? file-arg? args)
+      (conj "-f" (str (fs/path script-dir "green.edn"))))))
+
+(defn launched-as-script? []
+  (when-let [bb-file (System/getProperty "babashka.file")]
+    (= (str (fs/canonicalize bb-file))
+       (str (fs/canonicalize *file*)))))
+
+(defn run
+  "REPL-friendly entrypoint: runs without calling System/exit."
+  [& args]
+  (cli/run-cli workflow (default-args args)))
+
+(defn -main [& args]
+  (cli/exec workflow (default-args args)))
+
+(when (launched-as-script?)
+  (apply -main *command-line-args*))

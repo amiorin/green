@@ -338,6 +338,7 @@ In simple words:</p>
 <tr><td><code>examples/zookeeper</code></td><td>Dynamic fan-out from desired state, a join at <code>:zk/zoo-cfg</code>, Selmer scaffolding plus OpenTofu, backend-as-advice, and dry-run advice.</td></tr>
 <tr><td><code>examples/multi-zookeeper</code></td><td>Workflow composition: <code>wf/step</code> turns the ZooKeeper cluster workflow into a step, the parent fans it out once per cluster, and parent advice is inherited by the embedded workflow.</td></tr>
 <tr><td><code>examples/once</code></td><td>A Basecamp ONCE-style single-VPS PaaS. It demonstrates provider-swap advice on <code>:once/compute</code> (DigitalOcean mock vs OCI mock with one output contract), a genuine fork/join (<code>compute ∥ smtp → dns → smtp-post → (ansible-local ∥ ansible-remote)</code>), opts threaded front-to-back, isolated tofu state per step, and scaffold-only Ansible files. See <code>examples/once/SPEC.md</code> for the full walkthrough.</td></tr>
+<tr><td><code>examples/multi-once</code></td><td>The <code>once</code> workflow composed the way <code>multi-zookeeper</code> composes clusters: a parent forks one <code>once-wf</code> run per <code>:once/deployments</code> entry via <code>wf/step</code>, then swaps two inherited advices under their original ids — <code>::provider</code> becomes data-driven (DigitalOcean vs OCI per deployment) and <code>::backend</code> becomes S3, isolated by a per-deployment + per-step <code>:key</code> (<code>once/&lt;deployment&gt;/&lt;step&gt;/terraform.tfstate</code>). Declaring dry-run <em>last</em> keeps <code>::skip</code> outermost, so <code>--dry-run</code> skips the re-added <code>:before</code> provider/backend advice too. The S3 backend is demonstration-only (<code>create</code> needs a real bucket).</td></tr>
 </table>
 <pre><code>cd examples/zookeeper
 ./green create --dry-run
@@ -351,6 +352,11 @@ cd ../multi-zookeeper
 
 cd ../once
 ./green create --dry-run
+./green create
+./green delete
+
+cd ../multi-once
+./green create --dry-run   # two ONCE boxes from one once-wf; S3 backend is demonstration-only
 ./green create
 ./green delete</code></pre>
 
@@ -383,7 +389,8 @@ cd ../once
 ├── test-resources/     zk/main.tf, zk/zoo.cfg, … (qualified-namespace layout)
 ├── examples/zookeeper/ self-contained ./green script + green.edn + resources
 ├── examples/multi-zookeeper/ two clusters composed from one workflow (wf/step)
-└── examples/once/      ONCE-style single-VPS PaaS; provider swap + Ansible scaffolds</code></pre>
+├── examples/once/      ONCE-style single-VPS PaaS; provider swap + Ansible scaffolds
+└── examples/multi-once/ many ONCE boxes from one once-wf; data-driven provider + S3 backend</code></pre>
 
 <h3>Distribution</h3>
 <p>Library coordinate: <code>io.github.amiorin/green</code>. It has not been published to Clojars yet.</p>

@@ -138,6 +138,13 @@ Non-dry-run example runs require `tofu` on `PATH`; `--dry-run` only prints.
   (`compute ∥ smtp → dns → smtp-post → (ansible-local ∥ ansible-remote)`),
   threaded opts, per-step tofu state, and scaffold-only Ansible config. See
   `examples/once/SPEC.md` for the full walkthrough.
+- `examples/multi-once` — the `once` workflow composed the way
+  `multi-zookeeper` composes clusters: one `once-wf` run per
+  `:once/deployments` entry, with the parent swapping the inherited
+  `::provider` advice for a data-driven pick (DigitalOcean vs OCI per
+  deployment) and the inherited `::backend` advice for S3, isolated by a
+  per-deployment + per-step key. The S3 backend is demonstration-only
+  (`create` needs a real bucket; `--dry-run` runs offline).
 
 ```sh
 cd examples/zookeeper
@@ -153,6 +160,11 @@ cd ../multi-zookeeper
 cd ../once
 ./green create --dry-run   # compute/DNS/SMTP/smtp-post/Ansible steps are skipped
 ./green create             # fake ONCE-style VPS + DNS/SMTP + smtp-post + Ansible scaffolds
+./green delete
+
+cd ../multi-once
+./green create --dry-run   # two ONCE boxes from one once-wf; dry-run touches nothing
+./green create             # NOTE: S3 backend is demonstration-only — needs a real bucket
 ./green delete
 ```
 
