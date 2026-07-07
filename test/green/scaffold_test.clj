@@ -32,6 +32,21 @@
         (is (not (.exists (io/file dir "world" "hello.txt"))))
         (is (not (.exists (io/file dir "world"))))))))
 
+(deftest custom-delimiters-pass-jinja2-through
+  (let [dir (tmpdir)
+        specs [{:template :greentest/ansible-hello.yml
+                :target (str dir "/play.yml")
+                :data {:group "web"}
+                :opts {:tag-open \< :tag-close \>
+                       :filter-open \{ :filter-close \}}}]
+        created (sc/scaffold {:green/event :create} specs)]
+    (is (= 0 (:green/exit created)))
+    (let [content (slurp (str dir "/play.yml"))]
+      (is (re-find #"hosts: web" content)
+          "Selmer <{group}> is rendered")
+      (is (re-find #"\{\{ ansible_var \}\}" content)
+          "Jinja2 {{ }} passes through unchanged"))))
+
 (deftest missing-template-throws-with-context
   (is (thrown-with-msg? Exception #"template not found"
         (sc/scaffold {:green/event :create}

@@ -1,7 +1,10 @@
 (ns green.ansible-test
-  "Playbook selection, recap parsing, and inventory rendering need no
-  ansible binary — only `ansible-step` itself shells out."
-  (:require [clojure.test :refer [deftest is testing]]
+  "Playbook selection, recap parsing, inventory rendering, and
+  ansible-with-spec scaffolding need no ansible binary — only
+  `ansible-step` itself shells out."
+  (:require [clojure.java.io :as io]
+            [clojure.java.shell :as sh]
+            [clojure.test :refer [deftest is testing]]
             [green.ansible :as ansible])
   (:import [java.nio.file Files]
            [java.nio.file.attribute FileAttribute]))
@@ -64,3 +67,63 @@
     (is (= opts (advice opts)) "before-advice passes opts through")
     (is (= "[zookeeper]\nzk1 ansible_host=10.0.0.1\n"
            (slurp file)))))
+
+(def ^:private fake-recap
+  (str "PLAY RECAP *********************************************\n"
+       "localhost                  : ok=1    changed=0    unreachable=0"
+       "    failed=0    skipped=0    rescued=0    ignored=0\n"))
+
+(defn- stub-sh [& args]
+  (let [cmd (first args)]
+    (if (= "ansible-playbook" cmd)
+      {:exit 0 :out fake-recap :err ""}
+      (apply sh/sh args))))
+
+(deftest ansible-with-spec-scaffolds-on-create
+  (let [dir (tmpdir)
+        specs [{:template :greentest/create.yml
+                :target (str dir "/create.yml")
+                :data {:group "web" :name "test"}}
+               {:template :greentest/ansible.cfg
+                :target (str dir "/ansible.cfg")
+                :data {:inventory "inventory.ini"
+                       :host_key_checking "False"}}]]
+    (with-redefs [sh/sh stub-sh]
+      (let [opts (ansible/ansible-with-spec
+                  {:green/event :create}
+                  {:dir dir :inventory "inventory.ini"}
+                  specs)]
+        (testing "scaffolded playbook is rendered"
+          (is (.exists (io/file dir "create.yml")))
+          (is (re-find #"hosts: web" (slurp (str dir "/create.yml")))))
+        (testing "scaffolded ansible.cfg is rendered"
+          (is (.exists (io/file dir "ansible.cfg")))
+          (is (re-find #"host_key_checking = False"
+                       (slurp (str dir "/ansible.cfg")))))
+        (testing "ansible-step ran and returned recap"
+          (is (= 0 (:green/exit opts)))
+          (is (= {"localhost" {:ok 1 :changed 0 :unreachable 0 :failed 0
+                               :skipped 0 :rescued 0 :ignored 0}}
+                 (:ansible/recap opts))))))))
+
+(deftest ansible-with-spec-cleans-up-on-delete
+  (let [dir (tmpdir)
+        specs [{:template :greentest/create.yml
+                :target (str dir "/create.yml")
+                :data {:group "web" :name "test"}}
+               {:template :greentest/ansible.cfg
+                :target (str dir "/ansible.cfg")
+                :data {:inventory "inventory.ini"
+                       :host_key_checking "False"}}]]
+    (spit (str dir "/create.yml") "placeholder")
+    (spit (str dir "/ansible.cfg") "placeholder")
+    (with-redefs [sh/sh stub-sh]
+      (let [opts (ansible/ansible-with-spec
+                  {:green/event :delete}
+                  {:dir dir :inventory "inventory.ini"}
+                  specs)]
+        (testing "ansible-step ran the delete playbook"
+          (is (= 0 (:green/exit opts))))
+        (testing "scaffolded files are removed"
+          (is (not (.exists (io/file dir "create.yml"))))
+          (is (not (.exists (io/file dir "ansible.cfg")))))))))

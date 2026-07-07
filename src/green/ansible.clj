@@ -9,7 +9,8 @@
   (:require [cheshire.core :as json]
             [clojure.java.io :as io]
             [clojure.java.shell :as sh]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [green.scaffold :as sc]))
 
 (def default-playbooks
   "Event -> playbook file, relative to the step's :dir."
@@ -86,6 +87,17 @@
     (if (pos? (:exit res))
       (fail opts res pb)
       (assoc opts :green/exit 0 recap-key (parse-recap (:out res))))))
+
+(defn ansible-with-spec
+  "Scaffold ansible config files (playbooks, ansible.cfg, …) then run
+  ansible-playbook (create); or run ansible-playbook then remove the
+  scaffolded files (delete). Mirrors the tofu-with-spec pattern."
+  [opts ansible-config specs]
+  (if (= :delete (:green/event opts))
+    (let [opts (ansible-step opts ansible-config)]
+      (if (pos? (:green/exit opts 0)) opts (sc/scaffold opts specs)))
+    (let [opts (sc/scaffold opts specs)]
+      (ansible-step opts ansible-config))))
 
 ;; --- inventory ------------------------------------------------------------
 

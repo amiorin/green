@@ -291,6 +291,24 @@
       :vars {:ansible_user (:zk/user opts)
              :ansible_python_interpreter "/usr/bin/python3"}}}))
 
+(def ^:private selmer-ansible
+  {:tag-open \< :tag-close \> :filter-open \{ :filter-close \}})
+
+(defn- ansible-dir [opts]
+  (str (workdir opts) "/ansible/" (:id (:zk/node opts))))
+
+(defn- ansible-specs [opts]
+  (let [dir (ansible-dir opts)]
+    [{:template :zk.ansible/create.yml
+      :target (str dir "/create.yml")
+      :data {} :opts selmer-ansible}
+     {:template :zk.ansible/delete-node.yml
+      :target (str dir "/delete-node.yml")
+      :data {} :opts selmer-ansible}
+     {:template :zk.ansible/zoo.cfg.j2
+      :target (str dir "/templates/zoo.cfg.j2")
+      :data {} :opts selmer-ansible}]))
+
 (defn ansible-step
   "Per-node ansible: on create, provision ZooKeeper with the full ensemble
   passed as extra-vars; on delete, run delete-node.yml to stop ZK."
@@ -304,15 +322,16 @@
         (logln (str "ansible: " (ansible/playbook opts {:delete "delete-node.yml"})
                     " on " (:name node)
                     (when-not delete? " — a first create takes a few minutes")))
-        (ansible/ansible-step opts
-                              {:dir (str script-dir "/ansible")
-                               :inventory (node-inventory-file opts)
-                               :private-key (ssh-key opts)
-                               :host-key-checking false
-                               :playbooks {:delete "delete-node.yml"}
-                               :extra-vars (when-not delete?
-                                             {:ensemble (mapv #(select-keys % [:id :ip])
-                                                              (:zk/nodes opts))})})))))
+        (ansible/ansible-with-spec opts
+                                   {:dir (ansible-dir opts)
+                                    :inventory (node-inventory-file opts)
+                                    :private-key (ssh-key opts)
+                                    :host-key-checking false
+                                    :playbooks {:delete "delete-node.yml"}
+                                    :extra-vars (when-not delete?
+                                                  {:ensemble (mapv #(select-keys % [:id :ip])
+                                                                   (:zk/nodes opts))})}
+                                   (ansible-specs opts))))))
 
 (def teardown-step
   "Per-node delete sub-workflow: ansible stop → tofu destroy, composed as a

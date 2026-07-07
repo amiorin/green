@@ -18,14 +18,18 @@
        (name kw)))
 
 (defn render-template
-  "Render the classpath template named by qualified keyword `kw` with `data`."
-  [kw data]
-  (let [path (template-path kw)
-        res (io/resource path)]
-    (when-not res
-      (throw (ex-info (str "template not found on classpath: " path)
-                      {:template kw :path path})))
-    (selmer/render (slurp res) data)))
+  "Render the classpath template named by qualified keyword `kw` with `data`.
+  Optional `opts` are forwarded to selmer/render — use :tag-open, :tag-close,
+  :filter-open, :filter-close to override delimiters (e.g. <{ }> and <% %>
+  for Ansible files that reserve {{ }}/{% %} for Jinja2)."
+  ([kw data] (render-template kw data nil))
+  ([kw data opts]
+   (let [path (template-path kw)
+         res (io/resource path)]
+     (when-not res
+       (throw (ex-info (str "template not found on classpath: " path)
+                       {:template kw :path path})))
+     (selmer/render (slurp res) data opts))))
 
 (defn- prune-empty-dir! [^java.io.File f]
   (let [p (.getParentFile f)]
@@ -43,10 +47,10 @@
     (when (.exists f) (io/delete-file f))
     (prune-empty-dir! f)))
 
-(defn- create-target! [{:keys [template data]} target]
+(defn- create-target! [{:keys [template data opts]} target]
   (let [f (io/file target)]
     (io/make-parents f)
-    (spit f (render-template template data))))
+    (spit f (render-template template data opts))))
 
 (defn- delete-targets! [targets]
   (doseq [target targets]
