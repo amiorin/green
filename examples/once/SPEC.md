@@ -193,7 +193,7 @@ cloud produced the host.
 
 The tofu **backend is also advice** — the same `tofu.clj` idiom
 (`local-backend-advice`/`s3-backend-advice`/`gcs-backend-advice` write
-`backend.tf`). Each of the four tofu steps (`compute`, `smtp`, `dns`,
+`backend.tf.json`). Each of the four tofu steps (`compute`, `smtp`, `dns`,
 `smtp-post`) gets its **own isolated state** rather than sharing one. The
 isolation key is a **per-step identifier** — the last segment of each step's
 working dir (`work/server`, `work/smtp`, `work/dns`, `work/smtp-post`).
@@ -231,16 +231,16 @@ step name:
 
 ```
 work/
-  server/     backend.tf  main.tf         terraform.tfstate   (compute step; oci-mock | digitalocean-mock)
-  smtp/       backend.tf  main.tf         terraform.tfstate   (smtp step)
-  dns/        backend.tf  main.tf         terraform.tfstate   (dns step; cloudflare-mock, no outputs)
-  smtp-post/  backend.tf  main.tf         terraform.tfstate   (smtp-post step)
+  server/     backend.tf.json  main.tf         terraform.tfstate   (compute step; oci-mock | digitalocean-mock)
+  smtp/       backend.tf.json  main.tf         terraform.tfstate   (smtp step)
+  dns/        backend.tf.json  main.tf         terraform.tfstate   (dns step; cloudflare-mock, no outputs)
+  smtp-post/  backend.tf.json  main.tf         terraform.tfstate   (smtp-post step)
   ansible-local/   …config…                                   (ansible-local step; scaffold only, no state)
   ansible-remote/  …playbook…                                 (ansible-remote step; scaffold only, no state)
 ```
 
 Each tofu step computes its own `:dir` (e.g. `work/server`) and passes it
-to `tofu/tofu-step`; the `::backend` advice writes `backend.tf` into that
+to `tofu/tofu-step`; the `::backend` advice writes `backend.tf.json` into that
 same dir — the two agree on the path, exactly as `node-step` and the
 node backend advice do in zookeeper.
 

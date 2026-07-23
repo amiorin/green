@@ -243,7 +243,7 @@
   <li><code>:delete</code>: <code>tofu init</code>, then <code>tofu destroy -auto-approve</code>.</li>
   <li>Apply outputs are parsed to <code>{keyword value}</code> and assoc'd under <code>:tofu/outputs</code> by default. If you override <code>:output-key</code>, keep it namespaced.</li>
   <li>Non-zero process exits become <code>:green/exit</code> and <code>:green/err</code>.</li>
-  <li>Backends are not hardwired. <code>backend-advice</code> writes <code>backend.tf</code> for any backend type and flat config map (or function of opts). Helpers ship for local, S3, and GCS.</li>
+  <li>Backends are not hardwired. <code>backend-advice</code> writes <code>backend.tf.json</code> for any backend type and config map (or function of opts), preserving native JSON values and nested collections. Helpers ship for local, S3, and GCS.</li>
 </ul>
 
 <h2 id="ansible">9. Ansible integration</h2>

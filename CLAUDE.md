@@ -223,7 +223,7 @@ Eight main namespaces under `src/green/`:
   `:delete` → `init` + `destroy`. Backends are not
   hardwired — they're attached as `:before` advice
   (`local-backend-advice`/`s3-backend-advice`/`gcs-backend-advice`) that
-  writes `backend.tf` before the step runs.
+  writes `backend.tf.json` before the step runs.
 - **`ansible.clj`** — event-aware Ansible steps, modeled on `tofu.clj`:
   any non-`:delete` event runs the `:create` playbook (`create.yml` by
   default), `:delete` runs the `:delete` one — both via `ansible-playbook`

@@ -4,7 +4,7 @@
   `tofu output -json` is merged into opts under a namespaced key
   (:tofu/outputs by default). The backend is not hardwired: attach a
   :before advice built by `backend-advice`, `local-backend-advice`,
-  `s3-backend-advice`, or `gcs-backend-advice` to write backend.tf before
+  `s3-backend-advice`, or `gcs-backend-advice` to write backend.tf.json before
   the tofu command runs."
   (:require [cheshire.core :as json]
             [clojure.java.io :as io]
@@ -57,33 +57,39 @@
           delete? (assoc opts :green/exit 0)
           :else (assoc opts :green/exit 0 output-key (outputs dir)))))))
 
-(defn- hcl-value [v]
+(defn- json-key [k]
+  (if (keyword? k) (name k) (str k)))
+
+(defn- json-value [v]
   (cond
-    (keyword? v) (pr-str (name v))
-    (boolean? v) (str v)
-    (number? v) (str v)
-    :else (pr-str (str v))))
+    (keyword? v) (name v)
+    (map? v) (into (sorted-map)
+                   (map (fn [[k value]]
+                          [(json-key k) (json-value value)]))
+                   v)
+    (vector? v) (mapv json-value v)
+    :else v))
 
-(defn- hcl-attribute [[k v]]
-  (str "    " (name k) " = " (hcl-value v) "\n"))
-
-(defn- backend-hcl [type config]
-  (str "terraform {\n  backend \"" type "\" {\n"
-       (apply str (map hcl-attribute (sort-by key config)))
-       "  }\n}\n"))
+(defn- backend-json [type config]
+  (str (json/generate-string
+        {"terraform" {"backend" {(json-key type) (json-value config)}}}
+        {:pretty true})
+       "\n"))
 
 (defn- resolve-config [config opts]
   (if (fn? config) (config opts) config))
 
 (defn- write-backend! [dir type config]
-  (.mkdirs dir)
-  (spit (io/file dir "backend.tf") (backend-hcl type config)))
+  (let [dir (io/file dir)]
+    (.mkdirs dir)
+    (spit (io/file dir "backend.tf.json") (backend-json type config))))
 
 (defn backend-advice
   "Build a :before advice that writes a backend config into the directory
   returned by (dir-fn opts) before the step runs. `type` is the backend
-  name (\"local\", \"s3\", \"gcs\", …); `config` is a flat map of backend
-  attributes, or a function of opts returning one."
+  name (\"local\", \"s3\", \"gcs\", …); `config` is a map of backend
+  attributes, or a function of opts returning one. Keywords become JSON
+  strings while maps, vectors, booleans, numbers, and nil retain their shape."
   [dir-fn type config]
   (fn [opts]
     (write-backend! (io/file (dir-fn opts)) type (resolve-config config opts))

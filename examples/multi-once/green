@@ -22,7 +22,7 @@
 ;; bucket + AWS credentials and will not run offline. The offline path is
 ;; `./green create --dry-run`: the parent's dry-run advice is outermost, so it
 ;; skips each tofu step AND its :before provider/backend advice — touching
-;; nothing (no main.tf, no backend.tf, no S3).
+;; nothing (no main.tf, no backend.tf.json, no S3).
 (require '[babashka.fs :as fs])
 
 (def script-dir
@@ -129,7 +129,7 @@
 (defn start-step [opts] opts)
 
 ;; compute is a bare tofu run: its main.tf is written by the ::provider advice
-;; and its backend.tf by the ::backend advice, both :before.
+;; and its backend.tf.json by the ::backend advice, both :before.
 (defn compute-step [opts]
   (tofu/tofu-step opts {:dir (server-dir opts)}))
 

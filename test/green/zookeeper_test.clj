@@ -172,7 +172,7 @@
           (doseq [{:keys [id]} (:zk/servers state)]
             (let [dir (str work "/nodes/" id)]
               (is (.exists (io/file dir "main.tf")))
-              (is (.exists (io/file dir "backend.tf")) "advice wrote the backend")
+              (is (.exists (io/file dir "backend.tf.json")) "advice wrote the backend")
               (is (.exists (io/file dir "terraform.tfstate")) "local backend state")
               (let [cfg (slurp (io/file dir "zoo.cfg"))]
                 (doseq [{:keys [id ip]} (:zk/servers state)]
